@@ -1,0 +1,16 @@
+# Environment variables
+.env
+
+# API keys
+*.api
+
+# Output files
+output/
+
+# Python
+__pycache__/
+*.pyc
+venv/
+
+# macOS
+.DS_Store
