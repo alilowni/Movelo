@@ -10,7 +10,13 @@ output/
 # Python
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
 venv/
+.venv/
+env/
 
 # macOS
 .DS_Store
