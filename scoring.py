@@ -1,9 +1,9 @@
 """
 Bike scoring, trial log I/O, and data management.
 
-The master CSV gets two extra runtime columns:
-  - status:          "available" | "sold"  (persisted, toggled from dashboard)
-  - days_on_market:  int (incremented by the scheduler each simulated day)
+Runtime columns on the master CSV:
+  - status:          "available" | "sold"
+  - days_on_market:  int (incremented each campaign run)
 """
 
 import os
@@ -29,12 +29,11 @@ TRIALS_LOG_COLUMNS = [
     "image_prompt_b",
     "urban_image_path",
     "nature_image_path",
+    "sold_in_campaign",
 ]
 
+DAY_PENALTY = 0.15
 
-# ---------------------------------------------------------------------------
-# CSV helpers -- ensure status & days_on_market columns exist
-# ---------------------------------------------------------------------------
 
 def _ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
     if "status" not in df.columns:
@@ -47,7 +46,6 @@ def _ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _persist_columns(csv_path: str = None) -> None:
-    """Write status + days_on_market back to the master CSV (one-time bootstrap)."""
     csv_path = csv_path or cfg.CSV_PATH
     df = pd.read_csv(csv_path)
     changed = False
@@ -62,11 +60,10 @@ def _persist_columns(csv_path: str = None) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Bike scoring
+# Scoring
 # ---------------------------------------------------------------------------
 
 def load_and_score(csv_path: str = None) -> pd.DataFrame:
-    """Load bike CSV, ensure runtime columns, compute sell_difficulty_score."""
     csv_path = csv_path or cfg.CSV_PATH
     _persist_columns(csv_path)
     df = pd.read_csv(csv_path)
@@ -79,8 +76,7 @@ def load_and_score(csv_path: str = None) -> pd.DataFrame:
     km_known = km.dropna()
     km_min, km_max = km_known.min(), km_known.max()
     df["_mileage_score"] = np.where(
-        km.isna(),
-        3.0,
+        km.isna(), 3.0,
         ((km - km_min) / (km_max - km_min)) * 5,
     )
 
@@ -90,7 +86,7 @@ def load_and_score(csv_path: str = None) -> pd.DataFrame:
     year_map = {2024: 1, 2023: 2, 2022: 3, 2021: 4}
     df["_age_score"] = df["year"].map(year_map).fillna(4)
 
-    day_penalty = df["days_on_market"] * cfg.SCORE_DECAY_PER_DAY
+    day_penalty = df["days_on_market"] * DAY_PENALTY
 
     df["sell_difficulty_score"] = (
         0.30 * df["_price_score"]
@@ -104,9 +100,7 @@ def load_and_score(csv_path: str = None) -> pd.DataFrame:
     return df
 
 
-def filter_hard_to_sell(df: pd.DataFrame,
-                        threshold: int = None) -> pd.DataFrame:
-    """Return available bikes at or above the threshold."""
+def filter_hard_to_sell(df: pd.DataFrame, threshold: int = None) -> pd.DataFrame:
     threshold = threshold if threshold is not None else cfg.HARD_SELL_THRESHOLD
     available = df[df["status"] != "sold"]
     hard = available[available["sell_difficulty_score"] >= threshold]
@@ -116,7 +110,7 @@ def filter_hard_to_sell(df: pd.DataFrame,
 
 
 # ---------------------------------------------------------------------------
-# Sold / days-on-market management
+# Status management
 # ---------------------------------------------------------------------------
 
 def mark_bike_sold(bike_id: int, csv_path: str = None) -> None:
@@ -135,8 +129,8 @@ def mark_bike_available(bike_id: int, csv_path: str = None) -> None:
     df.to_csv(csv_path, index=False)
 
 
-def increment_days_on_market(csv_path: str = None) -> None:
-    """Add 1 simulated day to every available bike. Called each scheduler tick."""
+def advance_day(csv_path: str = None) -> None:
+    """Add 1 day to every available bike. Called once per campaign."""
     csv_path = csv_path or cfg.CSV_PATH
     df = pd.read_csv(csv_path)
     df = _ensure_columns(df)
@@ -146,13 +140,14 @@ def increment_days_on_market(csv_path: str = None) -> None:
 
 
 def simulate_sales(bike_ids: list[int], scores: dict[int, int],
-                   csv_path: str = None) -> list[int]:
-    """Roll dice for each marketed bike. Returns list of bike IDs that 'sold'.
-
-    Probability = BASE * (6 - score) / 5
-    So score-1 bikes sell ~100% of BASE, score-5 bikes sell ~20% of BASE.
+                   trial_num: int, csv_path: str = None,
+                   trials_path: str = None) -> list[int]:
+    """Roll dice for each marketed bike. Returns list of IDs that sold.
+    P(sold) = BASE * (6 - score) / 5
+    Also stamps sold_in_campaign in the trials log for easy retrieval.
     """
     csv_path = csv_path or cfg.CSV_PATH
+    trials_path = trials_path or cfg.TRIALS_LOG_PATH
     base = cfg.AUTO_SELL_PROBABILITY
     sold = []
     for bid in bike_ids:
@@ -161,11 +156,35 @@ def simulate_sales(bike_ids: list[int], scores: dict[int, int],
         if random.random() < prob:
             sold.append(bid)
             mark_bike_sold(bid, csv_path)
+
+    if sold:
+        _stamp_sold_in_log(sold, trial_num, trials_path)
     return sold
 
 
+def _stamp_sold_in_log(sold_ids: list[int], trial_num: int,
+                       path: str = None) -> None:
+    """Mark sold_in_campaign=yes for bikes sold in this campaign."""
+    path = path or cfg.TRIALS_LOG_PATH
+    df = pd.read_csv(path)
+    if "sold_in_campaign" not in df.columns:
+        df["sold_in_campaign"] = ""
+    df["sold_in_campaign"] = df["sold_in_campaign"].fillna("").astype(str)
+    mask = (df["trial_num"] == trial_num) & (df["bike_id"].isin(sold_ids))
+    df.loc[mask, "sold_in_campaign"] = "yes"
+    df.to_csv(path, index=False)
+
+
+def unsold_bike_ids(csv_path: str = None) -> list[int]:
+    """Simple retrieval: all bike IDs that are still available."""
+    csv_path = csv_path or cfg.CSV_PATH
+    df = pd.read_csv(csv_path)
+    df = _ensure_columns(df)
+    return df[df["status"] != "sold"]["id"].tolist()
+
+
 # ---------------------------------------------------------------------------
-# Trials log (separate CSV)
+# Trials log
 # ---------------------------------------------------------------------------
 
 def _ensure_trials_log(path: str = None) -> None:
@@ -216,11 +235,3 @@ def join_bikes_and_trials(csv_path: str = None,
     if trials.empty:
         return bikes
     return bikes.merge(trials, left_on="id", right_on="bike_id", how="left")
-
-
-if __name__ == "__main__":
-    df = load_and_score()
-    print(df[["id", "title", "price", "condition", "status",
-              "days_on_market", "sell_difficulty_score"]]
-          .sort_values("sell_difficulty_score", ascending=False)
-          .to_string(index=False))

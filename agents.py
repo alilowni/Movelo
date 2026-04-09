@@ -27,7 +27,6 @@ def _make_llm(temperature: float = 0.7) -> ChatGoogleGenerativeAI:
 # ---------------------------------------------------------------------------
 
 def test_llm_api() -> bool:
-    """Quick LLM ping -- returns True if the API responds."""
     try:
         llm = _make_llm(temperature=0.0)
         resp = llm.invoke([HumanMessage(content="Reply with exactly: OK")])
@@ -38,7 +37,6 @@ def test_llm_api() -> bool:
 
 
 def test_image_api() -> bool:
-    """Quick image-gen ping -- returns True if the API responds."""
     try:
         client = genai.Client()
         resp = client.models.generate_content(
@@ -58,50 +56,58 @@ def test_image_api() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Bike context builder (compact for token efficiency)
 # ---------------------------------------------------------------------------
 
-def _bike_summary(row: pd.Series) -> str:
-    """Context string for a single bike, with full trial history from trials_log.csv."""
-    parts = [
-        f"ID: {row['id']}",
-        f"Title: {row['title']}",
-        f"Brand: {row['brand']}",
-        f"Category: {row['category']}",
-        f"Price: EUR {row['price']:.0f}",
-        f"Condition: {row['condition']}",
-        f"KM ridden: {row['km_ridden'] if pd.notna(row['km_ridden']) else 'N/A'}",
-        f"Year: {int(row['year']) if pd.notna(row['year']) else 'N/A'}",
-        f"Frame size: {row['frame_size']}",
-        f"Sell difficulty score: {row['sell_difficulty_score']}",
-        f"Days on market: {row.get('days_on_market', 0)}",
-    ]
+def _bike_context(row: pd.Series) -> str:
+    """Compact bike context string. Includes only relevant fields + short history."""
+    color = row.get("color", "")
+    color_str = f", Color: {color}" if pd.notna(color) and color else ""
+    km = row["km_ridden"]
+    km_str = f"{int(km)} km" if pd.notna(km) else "unknown km"
+    year = int(row["year"]) if pd.notna(row["year"]) else "unknown"
     desc = row.get("description", "")
-    if pd.notna(desc) and desc:
-        parts.append(f"Description: {desc}")
+    desc_str = f" | {desc[:150]}" if pd.notna(desc) and desc else ""
+
+    line = (
+        f"[{row['id']}] {row['title']} | {row['brand']} {row['category']} | "
+        f"€{row['price']:.0f} | {row['condition']} | {year} | {km_str} | "
+        f"Score {row['sell_difficulty_score']}/5 | Day {row.get('days_on_market', 0)}"
+        f"{color_str}{desc_str}"
+    )
 
     history = load_trial_history_for_bike(int(row["id"]))
     if history:
-        parts.append(f"\n=== PAST CAMPAIGNS ({len(history)} total) — DO NOT REPEAT THESE ===")
-        for rec in history:
-            trial_n = rec.get("trial_num", "?")
-            parts.append(f"  Campaign #{trial_n} ({rec.get('date', '?')}):")
-            parts.append(f"    Selling angle: {rec.get('selling_angle', 'N/A')}")
-            parts.append(f"    Target audience: {rec.get('target_audience', 'N/A')}")
-            parts.append(f"    Tone: {rec.get('tone', 'N/A')}")
-            parts.append(f"    Actions: {rec.get('actions', 'N/A')}")
-            subj = rec.get("email_subject", "")
-            if subj:
-                parts.append(f"    Email subject: {subj}")
-            caption = rec.get("instagram_caption", "")
-            if caption:
-                short = caption[:120] + "..." if len(str(caption)) > 120 else caption
-                parts.append(f"    Instagram: {short}")
-        parts.append("=== END PAST CAMPAIGNS ===")
-    else:
-        parts.append("No previous campaigns for this bike.")
+        past = []
+        for h in history:
+            angle = h.get("selling_angle", "?")[:50]
+            tone = h.get("tone", "?")
+            audience = h.get("target_audience", "?")[:40]
+            past.append(f"#{h.get('trial_num','?')}: {angle} | tone={tone} | audience={audience}")
+        line += f"\n  PAST ({len(history)}x): " + " // ".join(past)
 
-    return "\n".join(parts)
+    return line
+
+
+def _bike_image_context(row: pd.Series) -> str:
+    """Extracted visual details for image generation prompts."""
+    parts = [f"{row['brand']} {row['title']}"]
+    cat = row.get("category", "")
+    if pd.notna(cat) and cat:
+        parts.append(f"category: {cat}")
+        is_city = any(k in str(cat).lower() for k in ["city", "urban", "e-city"])
+        parts.append(f"setting hint: {'urban/city' if is_city else 'nature/trail'}")
+    color = row.get("color", "")
+    if pd.notna(color) and color:
+        parts.append(f"color: {color}")
+    condition = row.get("condition", "")
+    if pd.notna(condition):
+        parts.append(f"condition: {condition}")
+    frame = row.get("frame_size", "")
+    if pd.notna(frame) and frame:
+        parts.append(f"frame: {frame}")
+    parts.append(f"brand on frame: {row['brand']}")
+    return ", ".join(parts)
 
 
 def _slug(title: str) -> str:
@@ -109,21 +115,17 @@ def _slug(title: str) -> str:
 
 
 def _parse_json_response(raw: str, step_name: str) -> list[dict]:
-    """Strip markdown fences and parse JSON."""
     text = raw.strip()
     if text.startswith("```"):
         text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-
     try:
         data = json.loads(text)
     except json.JSONDecodeError as e:
         print(f"  ERROR: {step_name} returned invalid JSON: {e}")
         sys.exit(1)
-
     if not isinstance(data, list):
         print(f"  ERROR: {step_name} returned JSON but not an array.")
         sys.exit(1)
-
     return data
 
 
@@ -134,21 +136,18 @@ def trial_output_dir(trial_num: int) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# Image download helper
+# Image download
 # ---------------------------------------------------------------------------
 
 def _download_image(url: str) -> bytes | None:
     if not url:
         return None
-
     IMAGE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     url_hash = hashlib.md5(url.encode()).hexdigest()
     ext = Path(url.split("?")[0]).suffix or ".webp"
     cache_path = IMAGE_CACHE_DIR / f"{url_hash}{ext}"
-
     if cache_path.exists():
         return cache_path.read_bytes()
-
     try:
         resp = requests.get(url, timeout=15)
         resp.raise_for_status()
@@ -169,110 +168,105 @@ def _mime_from_url(url: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Marketing Manager Agent
+# Marketing Manager
 # ---------------------------------------------------------------------------
 
 MANAGER_SYSTEM_PROMPT = """\
-You are a marketing manager for a refurbished bike online shop called movelo.
-Your job: look at bikes that are hard to sell and write a short marketing brief \
-for each one.
+You are a marketing manager for movelo, a refurbished bike shop.
+Analyze hard-to-sell bikes and create a brief for each.
 
-CRITICAL RULES:
-1. Each bike's data includes a "PAST CAMPAIGNS" section showing every strategy \
-we already tried. READ IT CAREFULLY.
-2. You MUST choose a DIFFERENT selling angle, target audience, and tone each time.  \
-If the past campaign used "value-focused" tone, try "adventurous" or "premium".  \
-If it targeted "budget-conscious riders", target "weekend explorers" or "commuters".
-3. Briefly explain in "why_different" how your new strategy differs from past ones.
-4. If a bike has been marketed 3+ times and still not sold, consider a completely \
-different approach: different audience, different angle, different content types.
+RULES:
+- Be concise. No filler.
+- If a bike has PAST campaigns listed, you MUST pick a different angle, \
+audience, and tone. Never repeat what was tried.
+- After 3+ failed campaigns, try a radically different approach.
 
-For EACH bike, return:
-- bike_id
-- target_audience (who would buy this -- must differ from past campaigns)
-- selling_angle (the main hook / value proposition -- must differ from past)
-- content_types (list: pick from "instagram_post", "email", "image_ad")
-- tone (e.g. "adventurous", "value-focused", "urban-chic" -- must differ from past)
-- key_message (one sentence the marketer should build around)
-- why_different (1 sentence: how this differs from the last campaign)
+For EACH bike return JSON:
+- bike_id (int)
+- target_audience (short, specific)
+- selling_angle (1 sentence max)
+- content_types (list: "instagram_post", "email", "image_ad")
+- tone (1 word)
+- key_message (1 sentence)
+- why_different (1 sentence if past campaigns exist, else "first campaign")
 
-Reply ONLY with a JSON array. No extra text.
+Reply ONLY with a JSON array.
 """
 
 
 def run_manager_agent(bikes_df: pd.DataFrame) -> list[dict]:
     llm = _make_llm(temperature=cfg.MANAGER_TEMPERATURE)
-
-    bike_texts = "\n---\n".join(
-        _bike_summary(row) for _, row in bikes_df.iterrows()
-    )
-
+    bike_texts = "\n".join(_bike_context(row) for _, row in bikes_df.iterrows())
     try:
         response = llm.invoke([
             SystemMessage(content=MANAGER_SYSTEM_PROMPT),
-            HumanMessage(content=f"Here are the bikes that need marketing help:\n\n{bike_texts}"),
+            HumanMessage(content=bike_texts),
         ])
     except Exception as e:
-        print(f"  ERROR: Marketing Manager call failed: {e}")
+        print(f"  ERROR: Manager call failed: {e}")
         sys.exit(1)
-
-    return _parse_json_response(response.content, "Marketing Manager")
+    return _parse_json_response(response.content, "Manager")
 
 
 # ---------------------------------------------------------------------------
-# Marketer Agent
+# Marketer
 # ---------------------------------------------------------------------------
 
 MARKETER_SYSTEM_PROMPT = """\
-You are a creative marketer for movelo, a refurbished bike shop.
-You receive a marketing brief from your manager and you execute it.
+You are a marketer for movelo, a refurbished bike shop based in the Netherlands.
+You receive briefs and produce content. Be concise.
 
-For EACH brief, produce:
-- bike_id
-- instagram_caption (engaging, with hashtags, max 200 words)
-- email_subject (short, punchy)
-- email_body (friendly, 3-4 sentences)
-- image_prompt_a (lifestyle photo prompt: a ~30 year old rider in an URBAN setting — \
-city street, cafe, park path. Describe the scene, lighting, mood, what the rider wears. \
-Be specific about the bike type and color.)
-- image_prompt_b (lifestyle photo prompt: same ~30 year old demographic but in a \
-NATURE / ADVENTURE setting — forest trail, countryside road, mountain overlook. \
-Different vibe from prompt A. Describe scene, lighting, mood, rider outfit.)
+For EACH brief produce:
+- bike_id (int)
+- instagram_caption: Casual, slightly playful tone. Short (max 120 words). \
+Include 5-8 relevant hashtags at the end. Don't overdo emojis (max 2). \
+Focus on the lifestyle benefit, not specs.
+- email_subject: Short, direct, max 8 words. Dutch communication style.
+- email_body: Clean, professional, direct. 2-3 sentences max. \
+No hype, no exclamation marks. State the value clearly. \
+Think Dutch directness: what it is, why it matters, what to do next.
+- image_prompt_a: PRIMARY lifestyle photo. Use the exact bike details \
+(brand, model, color, type) from the data. IMPORTANT: Match the bike category — \
+if the bike is a City/E-City/Urban bike, use a city/urban setting (Dutch streets, \
+canal bridge, bike lane). If it is a Trekking/E-Trekking/MTB/Gravel bike, use a \
+nature/trail setting. Describe: rider (~30yo), setting, lighting, mood, outfit. \
+The brand name must be visible on the bike frame. \
+Include a small "movelo" watermark/logo in the bottom-right corner. \
+Keep under 80 words. Must say "photo advertisement for movelo refurbished bike shop".
+- image_prompt_b: SECONDARY lifestyle photo. Same bike details. \
+Different setting from prompt A. If prompt A was urban, make this one a park/nature \
+scene. If prompt A was nature, make this one urban. Same branding rules: \
+brand name visible on bike, small "movelo" logo bottom-right corner. \
+Under 80 words. Must say "photo advertisement for movelo refurbished bike shop".
 
-IMPORTANT: Both image prompts must mention it is a photo advertisement for a \
-refurbished bike shop. Do NOT include any text or logos in the image description. \
-Keep prompts under 100 words each.
-
-Reply ONLY with a JSON array. No extra text.
+Reply ONLY with a JSON array.
 """
 
 
 def run_marketer_agent(briefs: list[dict], bikes_df: pd.DataFrame) -> list[dict]:
     llm = _make_llm(temperature=cfg.MARKETER_TEMPERATURE)
 
-    bike_lookup = {
-        int(row["id"]): _bike_summary(row) for _, row in bikes_df.iterrows()
+    bike_visual = {
+        int(row["id"]): _bike_image_context(row) for _, row in bikes_df.iterrows()
     }
 
     context_parts = []
     for brief in briefs:
         bid = brief.get("bike_id")
-        bike_info = bike_lookup.get(bid, "No extra info available.")
+        visual = bike_visual.get(bid, "no details")
         context_parts.append(
-            f"== Brief ==\n{json.dumps(brief, indent=2)}\n\n== Bike Data ==\n{bike_info}"
+            f"Brief: {json.dumps(brief)}\nBike visual: {visual}"
         )
 
-    payload = "\n\n---\n\n".join(context_parts)
-
+    payload = "\n---\n".join(context_parts)
     try:
         response = llm.invoke([
             SystemMessage(content=MARKETER_SYSTEM_PROMPT),
-            HumanMessage(content=f"Execute these briefs:\n\n{payload}"),
+            HumanMessage(content=payload),
         ])
     except Exception as e:
         print(f"  ERROR: Marketer call failed: {e}")
         sys.exit(1)
-
     return _parse_json_response(response.content, "Marketer")
 
 
@@ -288,12 +282,9 @@ def generate_images(content_list: list[dict], bikes_df: pd.DataFrame,
         print(f"  ERROR: Could not create Gemini client: {e}")
         sys.exit(1)
 
-    title_lookup = {
-        int(row["id"]): row["title"] for _, row in bikes_df.iterrows()
-    }
-    image_url_lookup = {
-        int(row["id"]): row.get("image_url", "") for _, row in bikes_df.iterrows()
-    }
+    title_lookup = {int(row["id"]): row["title"] for _, row in bikes_df.iterrows()}
+    image_url_lookup = {int(row["id"]): row.get("image_url", "") for _, row in bikes_df.iterrows()}
+    visual_lookup = {int(row["id"]): _bike_image_context(row) for _, row in bikes_df.iterrows()}
 
     base_dir = trial_output_dir(trial_num)
     results = {}
@@ -301,8 +292,7 @@ def generate_images(content_list: list[dict], bikes_df: pd.DataFrame,
     for item in content_list:
         bid = item.get("bike_id")
         title = title_lookup.get(bid, f"bike_{bid}")
-        folder_name = f"bike_{bid}_{_slug(title)}"
-        folder = base_dir / folder_name
+        folder = base_dir / f"bike_{bid}_{_slug(title)}"
         folder.mkdir(parents=True, exist_ok=True)
 
         brief_path = folder / "content.json"
@@ -311,6 +301,7 @@ def generate_images(content_list: list[dict], bikes_df: pd.DataFrame,
         bike_image_url = image_url_lookup.get(bid, "")
         bike_image_bytes = _download_image(bike_image_url)
         has_ref = bike_image_bytes is not None
+        visual = visual_lookup.get(bid, "")
 
         paths = []
         for label, key in [("urban", "image_prompt_a"), ("nature", "image_prompt_b")]:
@@ -322,18 +313,29 @@ def generate_images(content_list: list[dict], bikes_df: pd.DataFrame,
             print(f"  bike {bid} / {label} ...", end=" ", flush=True)
             try:
                 contents = []
+                brand_inst = (
+                    f"The brand name '{visual.split(',')[0].split()[0]}' "
+                    f"must be visible on the bike frame. "
+                    f"Include a small 'movelo' watermark in the bottom-right corner."
+                )
                 if has_ref:
                     contents.append(genai_types.Part.from_bytes(
                         data=bike_image_bytes,
                         mime_type=_mime_from_url(bike_image_url),
                     ))
                     contents.append(genai_types.Part.from_text(
-                        text=f"Generate a single high-quality lifestyle photo ad "
-                             f"featuring THIS exact bike shown in the reference image. {prompt}"
+                        text=(
+                            f"Generate a realistic lifestyle photo ad featuring "
+                            f"THIS exact bike from the reference image. "
+                            f"Bike: {visual}. {brand_inst} {prompt}"
+                        )
                     ))
                 else:
                     contents.append(genai_types.Part.from_text(
-                        text=f"Generate a single high-quality photo. {prompt}"
+                        text=(
+                            f"Generate a realistic lifestyle photo. "
+                            f"Bike: {visual}. {brand_inst} {prompt}"
+                        )
                     ))
 
                 response = client.models.generate_content(

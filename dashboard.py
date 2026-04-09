@@ -7,6 +7,8 @@ Run with:
     python main.py --dashboard
 """
 
+import subprocess
+import sys
 import pandas as pd
 import streamlit as st
 from pathlib import Path
@@ -15,8 +17,6 @@ from scoring import (
     load_and_score,
     load_trials,
     join_bikes_and_trials,
-    mark_bike_sold,
-    mark_bike_available,
 )
 
 st.set_page_config(page_title="movelo Dashboard", page_icon="🚲", layout="wide")
@@ -50,11 +50,10 @@ def status_badge(status: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Shared campaign card renderer
+# Campaign card renderer
 # ---------------------------------------------------------------------------
 
 def _render_campaign_card(row: pd.Series, bikes_df: pd.DataFrame) -> None:
-    """Render a single campaign entry with copyable content blocks."""
     bid = int(row["bike_id"])
     bike_info = bikes_df[bikes_df["id"] == bid]
     title = bike_info["title"].values[0] if not bike_info.empty else f"Bike {bid}"
@@ -62,8 +61,11 @@ def _render_campaign_card(row: pd.Series, bikes_df: pd.DataFrame) -> None:
     status = bike_info["status"].values[0] if not bike_info.empty else "available"
 
     trial_n = int(row.get("trial_num", 0))
+    sold_here = str(row.get("sold_in_campaign", "")).strip().lower() == "yes"
     header = f"Campaign {trial_n} — Bike {bid}: {title}"
-    if status == "sold":
+    if sold_here:
+        header += " 🎉 SOLD THIS CAMPAIGN"
+    elif status == "sold":
         header += " 🏷 SOLD"
 
     with st.expander(header, expanded=True):
@@ -76,7 +78,6 @@ def _render_campaign_card(row: pd.Series, bikes_df: pd.DataFrame) -> None:
         with c3:
             st.markdown(f"**Actions:** {row.get('actions', 'N/A')}")
 
-        # Copyable email block
         subj = row.get("email_subject", "")
         body = row.get("email_body", "")
         if pd.notna(subj) and subj:
@@ -86,13 +87,11 @@ def _render_campaign_card(row: pd.Series, bikes_df: pd.DataFrame) -> None:
                 email_text += f"\n\n{body}"
             st.code(email_text, language=None)
 
-        # Copyable Instagram block
         caption = row.get("instagram_caption", "")
         if pd.notna(caption) and caption:
             st.markdown("**Instagram caption**")
             st.code(str(caption), language=None)
 
-        # Images
         urban_path = row.get("urban_image_path", "")
         nature_path = row.get("nature_image_path", "")
         has_urban = pd.notna(urban_path) and urban_path and Path(urban_path).exists()
@@ -121,7 +120,7 @@ st.sidebar.caption("Refurbished Bike Marketing Dashboard")
 
 page = st.sidebar.radio(
     "Navigate",
-    ["Bike Inventory", "Campaigns", "Analytics"],
+    ["Bike Inventory", "Campaigns", "Run Campaign", "Analytics"],
 )
 
 st.sidebar.markdown("---")
@@ -228,15 +227,8 @@ if page == "Bike Inventory":
             current_status = bike_row.get("status", "available")
             if current_status == "sold":
                 st.success("This bike is marked as SOLD")
-                if st.button("Mark as available again", key=f"avail_{selected_id}"):
-                    mark_bike_available(selected_id)
-                    st.cache_data.clear()
-                    st.rerun()
             else:
-                if st.button("Mark as SOLD", key=f"sold_{selected_id}", type="primary"):
-                    mark_bike_sold(selected_id)
-                    st.cache_data.clear()
-                    st.rerun()
+                st.info("Sales happen automatically at the end of each campaign.")
 
 
 # ---------------------------------------------------------------------------
@@ -249,9 +241,8 @@ elif page == "Campaigns":
     bikes_df = get_bikes()
 
     if trials.empty:
-        st.info("No campaigns yet. Run `python main.py` to create one.")
+        st.info("No campaigns yet. Go to **Run Campaign** to start one.")
     else:
-        # View mode: by campaign OR by bike (journey)
         view_mode = st.radio("View by", ["Campaign", "Bike journey"],
                              horizontal=True, label_visibility="collapsed")
 
@@ -271,7 +262,7 @@ elif page == "Campaigns":
             for _, row in trial_data.iterrows():
                 _render_campaign_card(row, bikes_df)
 
-        else:  # Bike journey
+        else:
             targeted_ids = sorted(trials["bike_id"].unique())
             selected_bike = st.selectbox(
                 "Select bike to see full journey",
@@ -296,20 +287,73 @@ elif page == "Campaigns":
             if bike_trials.empty:
                 st.info("No campaigns for this bike yet.")
             else:
-                # Summary table
                 st.dataframe(
                     bike_trials[["trial_num", "date", "selling_angle", "target_audience",
                                  "tone", "actions", "email_subject"]],
                     width="stretch",
                     hide_index=True,
                 )
-                # Full cards
                 for _, row in bike_trials.iterrows():
                     _render_campaign_card(row, bikes_df)
 
 
 # ---------------------------------------------------------------------------
-# Page 3: Analytics
+# Page 3: Run Campaign (next day)
+# ---------------------------------------------------------------------------
+
+elif page == "Run Campaign":
+    st.title("Run Next Campaign")
+    bikes_df = get_bikes()
+    trials = get_trials()
+
+    n_avail = len(bikes_df[bikes_df["status"] != "sold"])
+    n_sold = len(bikes_df[bikes_df["status"] == "sold"])
+    current_day = int(bikes_df[bikes_df["status"] != "sold"]["days_on_market"].max()) if n_avail > 0 else 0
+    n_campaigns = int(trials["trial_num"].max()) if not trials.empty else 0
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Day", current_day)
+    col2.metric("Campaigns", n_campaigns)
+    col3.metric("Available", n_avail)
+    col4.metric("Sold", n_sold)
+
+    if n_avail == 0:
+        st.success("All bikes are sold!")
+    else:
+        st.markdown(
+            f"Clicking the button below will **advance 1 day** (scores update), "
+            f"then run a full marketing campaign for hard-to-sell bikes."
+        )
+
+        if st.button("Run next campaign", type="primary"):
+            log_area = st.empty()
+            with st.spinner("Running simulation..."):
+                result = subprocess.run(
+                    [sys.executable, "main.py"],
+                    capture_output=True,
+                    text=True,
+                    cwd=str(Path(__file__).parent),
+                    timeout=600,
+                )
+                output = result.stdout
+                if result.stderr:
+                    output += "\n" + result.stderr
+
+            if result.returncode == 0:
+                st.success("Campaign complete!")
+            else:
+                st.error(f"Pipeline exited with code {result.returncode}")
+
+            st.markdown("### Pipeline log")
+            st.code(output, language=None)
+
+            st.cache_data.clear()
+            st.markdown("---")
+            st.markdown("Refresh the page or click **Campaigns** to see results.")
+
+
+# ---------------------------------------------------------------------------
+# Page 4: Analytics
 # ---------------------------------------------------------------------------
 
 elif page == "Analytics":
@@ -358,6 +402,55 @@ elif page == "Analytics":
         st.warning(f"{len(never_marketed)} high-danger bikes have NEVER been marketed:")
         for _, r in never_marketed.iterrows():
             st.markdown(f"- **[{r['id']}] {r['title']}** — €{r['price']:.0f}, score {r['sell_difficulty_score']}, {r['days_on_market']} days")
+
+    # -- Trend charts --
+    if not trials.empty and "date" in trials.columns:
+        st.markdown("### Trends")
+        campaign_dates = (
+            trials.groupby("trial_num")["date"]
+            .first()
+            .reset_index()
+            .rename(columns={"date": "Date", "trial_num": "Campaign"})
+            .sort_values("Campaign")
+        )
+
+        sold_flags = trials[trials["sold_in_campaign"] == "yes"].copy() if "sold_in_campaign" in trials.columns else pd.DataFrame()
+
+        tcol1, tcol2 = st.columns(2)
+        with tcol1:
+            st.markdown("**Bikes targeted per campaign**")
+            bikes_per_campaign = (
+                trials.groupby("trial_num")["bike_id"]
+                .nunique()
+                .reset_index()
+                .rename(columns={"bike_id": "bikes_targeted", "trial_num": "campaign"})
+                .sort_values("campaign")
+            )
+            bikes_per_campaign = bikes_per_campaign.set_index("campaign")
+            st.line_chart(bikes_per_campaign["bikes_targeted"])
+
+        with tcol2:
+            st.markdown("**Cumulative bikes sold**")
+            if not sold_flags.empty:
+                sold_per_campaign = (
+                    sold_flags.groupby("trial_num")["bike_id"]
+                    .nunique()
+                    .reset_index()
+                    .rename(columns={"bike_id": "sold", "trial_num": "campaign"})
+                    .sort_values("campaign")
+                )
+                sold_per_campaign["cumulative_sold"] = sold_per_campaign["sold"].cumsum()
+                sold_per_campaign = sold_per_campaign.set_index("campaign")
+                st.line_chart(sold_per_campaign["cumulative_sold"])
+            else:
+                st.info("No sales recorded yet.")
+
+        st.markdown("**Available vs Sold (current snapshot)**")
+        snap = pd.DataFrame({
+            "Status": ["Available", "Sold"],
+            "Count": [n_avail, n_sold],
+        }).set_index("Status")
+        st.bar_chart(snap)
 
     st.markdown("### Marketing frequency by brand")
     if not trials.empty:
