@@ -32,7 +32,7 @@ TRIALS_LOG_COLUMNS = [
     "sold_in_campaign",
 ]
 
-DAY_PENALTY = 0.15
+DAY_PENALTY = 0.30
 
 
 def _ensure_columns(df: pd.DataFrame) -> pd.DataFrame:

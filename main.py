@@ -72,9 +72,12 @@ def step_advance_day(ctx: dict) -> dict:
 def step_score(ctx: dict) -> dict:
     df = load_and_score()
     trial_num = next_trial_number()
-    n_avail = len(df[df["status"] != "sold"])
-    n_sold = len(df[df["status"] == "sold"])
-    print(f"  Campaign {trial_num} | {n_avail} available, {n_sold} sold")
+    avail = df[df["status"] != "sold"]
+    n_sold = len(df) - len(avail)
+    danger = len(avail[avail["sell_difficulty_score"] >= cfg.HARD_SELL_THRESHOLD])
+    max_day = int(avail["days_on_market"].max()) if not avail.empty else 0
+    print(f"  Campaign {trial_num} | {len(avail)} available, {n_sold} sold | "
+          f"{danger} in danger (>={cfg.HARD_SELL_THRESHOLD}) | day {max_day}")
     ctx["df"] = df
     ctx["trial_num"] = trial_num
     return ctx

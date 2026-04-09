@@ -34,20 +34,24 @@ flowchart TD
     Log --> TrialsCSV["trials_log.csv"]
 ```
 
+
+
 ## Configuration (.env)
 
 All settings are controlled via `.env` (see `.env.example` for full list):
 
-| Variable | Default | Description |
-|---|---|---|
-| `GOOGLE_API_KEY` | (required) | Gemini API key |
-| `LLM_MODEL` | gemini-2.0-flash | Model for Manager + Marketer agents |
-| `IMAGE_MODEL` | gemini-2.5-flash-image | Model for image generation |
-| `MANAGER_TEMPERATURE` | 0.4 | LLM temperature for the Manager |
-| `MARKETER_TEMPERATURE` | 0.8 | LLM temperature for the Marketer |
-| `HARD_SELL_THRESHOLD` | 5 | Min difficulty score to target a bike |
-| `SCORE_DECAY_PER_DAY` | 0.15 | Score penalty per simulated day unsold |
-| `LOOP_INTERVAL_SEC` | 300 | Seconds between scheduler iterations |
+
+| Variable               | Default                | Description                            |
+| ---------------------- | ---------------------- | -------------------------------------- |
+| `GOOGLE_API_KEY`       | (required)             | Gemini API key                         |
+| `LLM_MODEL`            | gemini-2.0-flash       | Model for Manager + Marketer agents    |
+| `IMAGE_MODEL`          | gemini-2.5-flash-image | Model for image generation             |
+| `MANAGER_TEMPERATURE`  | 0.4                    | LLM temperature for the Manager        |
+| `MARKETER_TEMPERATURE` | 0.8                    | LLM temperature for the Marketer       |
+| `HARD_SELL_THRESHOLD`  | 5                      | Min difficulty score to target a bike  |
+| `SCORE_DECAY_PER_DAY`  | 0.15                   | Score penalty per simulated day unsold |
+| `LOOP_INTERVAL_SEC`    | 300                    | Seconds between scheduler iterations   |
+
 
 ## Scheduler mode (`--loop`)
 
@@ -64,8 +68,8 @@ Mark a bike as **SOLD** in the Streamlit dashboard to stop it from being targete
 
 Two CSV files with an SQL-like join on `bike_id = id`:
 
-- **`sample_data_movelo_links.csv`** -- bike inventory with `status` and `days_on_market`
-- **`trials_log.csv`** -- one row per bike per trial
+- `**sample_data_movelo_links.csv`** -- bike inventory with `status` and `days_on_market`
+- `**trials_log.csv**` -- one row per bike per trial
 
 ## Streamlit Dashboard
 
@@ -82,23 +86,28 @@ Four pages:
 
 ## Files
 
-| File | What it does |
-|---|---|
-| `main.py` | Entry point -- CLI with `--test-api`, `--loop`, `--dashboard` |
-| `config.py` | Central config -- reads all tunables from `.env` |
-| `pipeline.py` | Pipeline factory -- register/run ordered steps |
-| `scoring.py` | Scoring + decay + sold status + trial log I/O |
-| `agents.py` | Marketing Manager + Marketer + image gen + API tests |
-| `dashboard.py` | Streamlit dashboard (4 pages) |
-| `migrate_trials.py` | One-time migration from output/ to trials_log.csv |
-| `.env.example` | Template for all config variables |
+
+| File                | What it does                                                  |
+| ------------------- | ------------------------------------------------------------- |
+| `main.py`           | Entry point -- CLI with `--test-api`, `--loop`, `--dashboard` |
+| `config.py`         | Central config -- reads all tunables from `.env`              |
+| `pipeline.py`       | Pipeline factory -- register/run ordered steps                |
+| `scoring.py`        | Scoring + decay + sold status + trial log I/O                 |
+| `agents.py`         | Marketing Manager + Marketer + image gen + API tests          |
+| `dashboard.py`      | Streamlit dashboard (4 pages)                                 |
+| `migrate_trials.py` | One-time migration from output/ to trials_log.csv             |
+| `.env.example`      | Template for all config variables                             |
+
 
 ## Scoring formula
 
-| Factor | Weight | 0 (easy) | 5 (hard) |
-|---|---|---|---|
-| Price | 30% | Cheapest | Most expensive |
-| Mileage | 30% | 0 km | 15,000+ km |
-| Condition | 20% | Excellent | Good |
-| Age | 20% | 2024 | 2021 or unknown |
-| Time decay | +0.15/day | Day 0 | Accumulates |
+
+| Factor     | Weight    | 0 (easy)  | 5 (hard)        |
+| ---------- | --------- | --------- | --------------- |
+| Price      | 30%       | Cheapest  | Most expensive  |
+| Mileage    | 30%       | 0 km      | 15,000+ km      |
+| Condition  | 20%       | Excellent | Good            |
+| Age        | 20%       | 2024      | 2021 or unknown |
+| Time decay | +0.15/day | Day 0     | Accumulates     |
+
+
