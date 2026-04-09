@@ -85,6 +85,10 @@ def step_score(ctx: dict) -> dict:
 
 def step_filter(ctx: dict) -> dict:
     hard = filter_hard_to_sell(ctx["df"])
+    cap = cfg.MAX_BIKES_PER_CAMPAIGN
+    if len(hard) > cap:
+        hard = hard.sort_values("sell_difficulty_score", ascending=False).head(cap)
+        print(f"  {len(ctx['df'][ctx['df']['status'] != 'sold'])} in danger, capped to top {cap}")
     ids = [int(r["id"]) for _, r in hard.iterrows()]
     print(f"  {len(hard)} bikes targeted: {ids}")
     ctx["hard"] = hard

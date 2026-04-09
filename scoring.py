@@ -14,6 +14,23 @@ import numpy as np
 
 import config as cfg
 
+KB_COLUMNS = [
+    "bike_id",
+    "trial_num",
+    "date",
+    "title",
+    "brand",
+    "category",
+    "price",
+    "sell_difficulty_score",
+    "days_on_market",
+    "campaigns_run",
+    "selling_angle",
+    "target_audience",
+    "tone",
+    "reason_note",
+]
+
 TRIALS_LOG_COLUMNS = [
     "trial_num",
     "bike_id",
@@ -159,7 +176,81 @@ def simulate_sales(bike_ids: list[int], scores: dict[int, int],
 
     if sold:
         _stamp_sold_in_log(sold, trial_num, trials_path)
+        _record_sale_insights(sold, trial_num, csv_path, trials_path)
     return sold
+
+
+def _record_sale_insights(sold_ids: list[int], trial_num: int,
+                          csv_path: str, trials_path: str) -> None:
+    """For each sold bike, ask the LLM for a short note on why it likely sold,
+    then append to the knowledge base CSV. Local import avoids circular import."""
+    from agents import summarize_sale_reason  # local to avoid circular import
+
+    bikes = load_and_score(csv_path)
+    trials = load_trials(trials_path)
+
+    rows = []
+    for bid in sold_ids:
+        bike_match = bikes[bikes["id"] == bid]
+        if bike_match.empty:
+            continue
+        b = bike_match.iloc[0]
+
+        bike_trials = trials[trials["bike_id"] == bid].sort_values("trial_num")
+        last = bike_trials.iloc[-1].to_dict() if not bike_trials.empty else {}
+        n_campaigns = len(bike_trials)
+
+        try:
+            note = summarize_sale_reason(b, last, n_campaigns)
+        except Exception as e:
+            note = f"(auto-note unavailable: {e})"
+
+        rows.append({
+            "bike_id": int(bid),
+            "trial_num": int(trial_num),
+            "date": str(last.get("date", "")),
+            "title": b.get("title", ""),
+            "brand": b.get("brand", ""),
+            "category": b.get("category", ""),
+            "price": float(b.get("price", 0) or 0),
+            "sell_difficulty_score": int(b.get("sell_difficulty_score", 0) or 0)
+                if "sell_difficulty_score" in b else 0,
+            "days_on_market": int(b.get("days_on_market", 0) or 0),
+            "campaigns_run": int(n_campaigns),
+            "selling_angle": last.get("selling_angle", ""),
+            "target_audience": last.get("target_audience", ""),
+            "tone": last.get("tone", ""),
+            "reason_note": note,
+        })
+
+    if rows:
+        append_knowledge_base(rows)
+
+
+# ---------------------------------------------------------------------------
+# Knowledge base
+# ---------------------------------------------------------------------------
+
+def _ensure_knowledge_base(path: str = None) -> None:
+    path = path or cfg.KNOWLEDGE_BASE_PATH
+    if not os.path.exists(path):
+        pd.DataFrame(columns=KB_COLUMNS).to_csv(path, index=False)
+
+
+def load_knowledge_base(path: str = None) -> pd.DataFrame:
+    path = path or cfg.KNOWLEDGE_BASE_PATH
+    _ensure_knowledge_base(path)
+    df = pd.read_csv(path)
+    if df.empty:
+        return pd.DataFrame(columns=KB_COLUMNS)
+    return df
+
+
+def append_knowledge_base(records: list[dict], path: str = None) -> None:
+    path = path or cfg.KNOWLEDGE_BASE_PATH
+    _ensure_knowledge_base(path)
+    new_df = pd.DataFrame(records, columns=KB_COLUMNS)
+    new_df.to_csv(path, mode="a", header=False, index=False)
 
 
 def _stamp_sold_in_log(sold_ids: list[int], trial_num: int,

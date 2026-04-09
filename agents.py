@@ -114,18 +114,18 @@ def _slug(title: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")[:40]
 
 
-def _parse_json_response(raw: str, step_name: str) -> list[dict]:
+def _parse_json_response(raw: str, step_name: str) -> list[dict] | None:
     text = raw.strip()
     if text.startswith("```"):
         text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
     try:
         data = json.loads(text)
     except json.JSONDecodeError as e:
-        print(f"  ERROR: {step_name} returned invalid JSON: {e}")
-        sys.exit(1)
+        print(f"  WARN: {step_name} returned invalid JSON: {e}")
+        return None
     if not isinstance(data, list):
-        print(f"  ERROR: {step_name} returned JSON but not an array.")
-        sys.exit(1)
+        print(f"  WARN: {step_name} returned JSON but not an array.")
+        return None
     return data
 
 
@@ -194,18 +194,71 @@ Reply ONLY with a JSON array.
 """
 
 
-def run_manager_agent(bikes_df: pd.DataFrame) -> list[dict]:
-    llm = _make_llm(temperature=cfg.MANAGER_TEMPERATURE)
-    bike_texts = "\n".join(_bike_context(row) for _, row in bikes_df.iterrows())
+SALE_REASON_SYSTEM_PROMPT = """\
+You are a marketing analyst for movelo (refurbished bikes).
+A bike has just SOLD. In ONE short sentence (max 25 words), state the most \
+likely reason it sold — the angle, audience match, tone, price/condition fit, \
+timing, or persistence. Be concrete and useful for future campaigns. \
+No filler, no hedging, no "perhaps". Reply with the sentence only.
+"""
+
+
+def summarize_sale_reason(bike_row: pd.Series, last_campaign: dict,
+                          campaigns_run: int) -> str:
+    """Generate a one-sentence note explaining why a bike likely sold."""
+    llm = _make_llm(temperature=0.3)
+    km = bike_row.get("km_ridden")
+    km_str = f"{int(km)} km" if pd.notna(km) else "unknown km"
+    year = int(bike_row["year"]) if pd.notna(bike_row.get("year")) else "unknown"
+
+    bike_line = (
+        f"{bike_row.get('title','')} | {bike_row.get('brand','')} "
+        f"{bike_row.get('category','')} | €{float(bike_row.get('price',0) or 0):.0f} | "
+        f"{bike_row.get('condition','')} | {year} | {km_str} | "
+        f"score {bike_row.get('sell_difficulty_score','?')}/5 | "
+        f"days listed {bike_row.get('days_on_market',0)} | "
+        f"campaigns run {campaigns_run}"
+    )
+    if last_campaign:
+        camp_line = (
+            f"Last campaign — angle: {last_campaign.get('selling_angle','?')} | "
+            f"audience: {last_campaign.get('target_audience','?')} | "
+            f"tone: {last_campaign.get('tone','?')} | "
+            f"actions: {last_campaign.get('actions','?')}"
+        )
+    else:
+        camp_line = "Last campaign — none (sold without targeted marketing)."
+
+    payload = f"{bike_line}\n{camp_line}"
     try:
         response = llm.invoke([
-            SystemMessage(content=MANAGER_SYSTEM_PROMPT),
-            HumanMessage(content=bike_texts),
+            SystemMessage(content=SALE_REASON_SYSTEM_PROMPT),
+            HumanMessage(content=payload),
         ])
+        text = (response.content or "").strip().strip('"').strip()
+        return text or "(no reason produced)"
     except Exception as e:
-        print(f"  ERROR: Manager call failed: {e}")
-        sys.exit(1)
-    return _parse_json_response(response.content, "Manager")
+        return f"(LLM error: {e})"
+
+
+def run_manager_agent(bikes_df: pd.DataFrame, max_retries: int = 2) -> list[dict]:
+    llm = _make_llm(temperature=cfg.MANAGER_TEMPERATURE)
+    bike_texts = "\n".join(_bike_context(row) for _, row in bikes_df.iterrows())
+    for attempt in range(max_retries):
+        try:
+            response = llm.invoke([
+                SystemMessage(content=MANAGER_SYSTEM_PROMPT),
+                HumanMessage(content=bike_texts),
+            ])
+        except Exception as e:
+            print(f"  ERROR: Manager call failed: {e}")
+            sys.exit(1)
+        result = _parse_json_response(response.content, "Manager")
+        if result is not None:
+            return result
+        print(f"  Retrying manager ({attempt + 1}/{max_retries})...")
+    print("  ERROR: Manager failed after retries.")
+    sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -243,6 +296,10 @@ Reply ONLY with a JSON array.
 """
 
 
+MARKETER_BATCH_SIZE = 5
+MARKETER_MAX_RETRIES = 2
+
+
 def run_marketer_agent(briefs: list[dict], bikes_df: pd.DataFrame) -> list[dict]:
     llm = _make_llm(temperature=cfg.MARKETER_TEMPERATURE)
 
@@ -250,24 +307,42 @@ def run_marketer_agent(briefs: list[dict], bikes_df: pd.DataFrame) -> list[dict]
         int(row["id"]): _bike_image_context(row) for _, row in bikes_df.iterrows()
     }
 
-    context_parts = []
-    for brief in briefs:
-        bid = brief.get("bike_id")
-        visual = bike_visual.get(bid, "no details")
-        context_parts.append(
-            f"Brief: {json.dumps(brief)}\nBike visual: {visual}"
-        )
+    all_results: list[dict] = []
+    for i in range(0, len(briefs), MARKETER_BATCH_SIZE):
+        batch = briefs[i : i + MARKETER_BATCH_SIZE]
+        batch_ids = [b.get("bike_id") for b in batch]
+        print(f"  marketer batch {i // MARKETER_BATCH_SIZE + 1} — bikes {batch_ids}")
 
-    payload = "\n---\n".join(context_parts)
-    try:
-        response = llm.invoke([
-            SystemMessage(content=MARKETER_SYSTEM_PROMPT),
-            HumanMessage(content=payload),
-        ])
-    except Exception as e:
-        print(f"  ERROR: Marketer call failed: {e}")
-        sys.exit(1)
-    return _parse_json_response(response.content, "Marketer")
+        context_parts = []
+        for brief in batch:
+            bid = brief.get("bike_id")
+            visual = bike_visual.get(bid, "no details")
+            context_parts.append(
+                f"Brief: {json.dumps(brief)}\nBike visual: {visual}"
+            )
+        payload = "\n---\n".join(context_parts)
+
+        result = None
+        for attempt in range(MARKETER_MAX_RETRIES):
+            try:
+                response = llm.invoke([
+                    SystemMessage(content=MARKETER_SYSTEM_PROMPT),
+                    HumanMessage(content=payload),
+                ])
+            except Exception as e:
+                print(f"  ERROR: Marketer call failed: {e}")
+                sys.exit(1)
+            result = _parse_json_response(response.content, "Marketer")
+            if result is not None:
+                break
+            print(f"  Retrying marketer batch ({attempt + 1}/{MARKETER_MAX_RETRIES})...")
+
+        if result is None:
+            print(f"  ERROR: Marketer batch failed after retries for bikes {batch_ids}")
+            sys.exit(1)
+        all_results.extend(result)
+
+    return all_results
 
 
 # ---------------------------------------------------------------------------

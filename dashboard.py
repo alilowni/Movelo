@@ -17,6 +17,7 @@ from scoring import (
     load_and_score,
     load_trials,
     join_bikes_and_trials,
+    load_knowledge_base,
 )
 
 st.set_page_config(page_title="movelo Dashboard", page_icon="🚲", layout="wide")
@@ -35,6 +36,11 @@ def get_trials() -> pd.DataFrame:
 @st.cache_data(ttl=10)
 def get_joined() -> pd.DataFrame:
     return join_bikes_and_trials()
+
+
+@st.cache_data(ttl=10)
+def get_knowledge_base() -> pd.DataFrame:
+    return load_knowledge_base()
 
 
 def danger_color(score: int) -> str:
@@ -120,7 +126,7 @@ st.sidebar.caption("Refurbished Bike Marketing Dashboard")
 
 page = st.sidebar.radio(
     "Navigate",
-    ["Bike Inventory", "Campaigns", "Run Campaign", "Analytics"],
+    ["Bike Inventory", "Campaigns", "Run Campaign", "Analytics", "Knowledge Base"],
 )
 
 st.sidebar.markdown("---")
@@ -480,3 +486,84 @@ elif page == "Analytics":
     if "trial_num" in display_joined.columns:
         show_cols += ["trial_num", "date", "selling_angle", "actions"]
     st.dataframe(display_joined[show_cols], width="stretch", hide_index=True)
+
+
+# ---------------------------------------------------------------------------
+# Page 5: Knowledge Base
+# ---------------------------------------------------------------------------
+
+elif page == "Knowledge Base":
+    st.title("Sales Knowledge Base")
+    st.caption(
+        "Short notes on **why each sold bike likely sold** — captured automatically "
+        "the moment a bike sells. Use this to spot what works so future campaigns "
+        "can lean into it."
+    )
+
+    kb = get_knowledge_base()
+
+    if kb.empty:
+        st.info(
+            "No sales recorded yet. Run campaigns from **Run Campaign** — every "
+            "time a bike sells, an insight will be added here."
+        )
+    else:
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Bikes sold", len(kb))
+        m2.metric("Avg score sold", f"{kb['sell_difficulty_score'].mean():.1f}/5")
+        m3.metric("Avg days listed", f"{kb['days_on_market'].mean():.0f}")
+        m4.metric("Avg campaigns run", f"{kb['campaigns_run'].mean():.1f}")
+
+        st.markdown("### Latest insights")
+        kb_sorted = kb.sort_values("trial_num", ascending=False)
+
+        fc1, fc2 = st.columns(2)
+        with fc1:
+            brand_filter = st.multiselect(
+                "Filter by brand", sorted(kb["brand"].dropna().unique()), key="kb_brand"
+            )
+        with fc2:
+            tone_filter = st.multiselect(
+                "Filter by tone", sorted(kb["tone"].dropna().unique()), key="kb_tone"
+            )
+
+        view = kb_sorted.copy()
+        if brand_filter:
+            view = view[view["brand"].isin(brand_filter)]
+        if tone_filter:
+            view = view[view["tone"].isin(tone_filter)]
+
+        for _, row in view.iterrows():
+            header = (
+                f"Bike {int(row['bike_id'])} — {row['title']} "
+                f"(€{float(row['price']):.0f}) · sold in campaign "
+                f"{int(row['trial_num'])}"
+            )
+            with st.expander(header, expanded=True):
+                st.markdown(f"**Why it sold:** {row['reason_note']}")
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    st.markdown(f"**Brand:** {row['brand']}")
+                    st.markdown(f"**Category:** {row['category']}")
+                with c2:
+                    st.markdown(f"**Score:** {int(row['sell_difficulty_score'])}/5")
+                    st.markdown(f"**Days listed:** {int(row['days_on_market'])}")
+                with c3:
+                    st.markdown(f"**Campaigns run:** {int(row['campaigns_run'])}")
+                    st.markdown(f"**Tone used:** {row['tone'] or '—'}")
+                if row.get("selling_angle"):
+                    st.markdown(f"**Winning angle:** {row['selling_angle']}")
+                if row.get("target_audience"):
+                    st.markdown(f"**Audience:** {row['target_audience']}")
+
+        st.markdown("### Full table")
+        st.dataframe(
+            view[[
+                "bike_id", "trial_num", "date", "title", "brand", "category",
+                "price", "sell_difficulty_score", "days_on_market",
+                "campaigns_run", "tone", "selling_angle", "target_audience",
+                "reason_note",
+            ]],
+            width="stretch",
+            hide_index=True,
+        )
