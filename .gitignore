@@ -17,4 +17,7 @@ venv/
 
 # macOS
 .DS_Store
+*.csv
 sample_data_movelo_links.csv
+knowledge_base.csv
+trials_log.csv
