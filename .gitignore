@@ -7,6 +7,9 @@
 # Output files
 output/
 
+# Trial log (generated data)
+trials_log.csv
+
 # Python
 __pycache__/
 *.pyc
