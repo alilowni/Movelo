@@ -1,5 +1,5 @@
-# AI agents — manager, marketer, image gen, sale reason analysis.
-# All LLM calls are wrapped in try/except so the pipeline never crashes.
+# ai agents — manager, marketer, image gen, sale reason analysis.
+# all llm calls are wrapped in try/except so the pipeline never crashes.
 
 import hashlib
 import json
@@ -25,7 +25,7 @@ def _make_llm(temperature: float = 0.7) -> ChatGoogleGenerativeAI:
     return ChatGoogleGenerativeAI(model=cfg.LLM_MODEL, temperature=temperature)
 
 
-# API health checks
+# api health checks
 
 def test_llm_api() -> bool:
     try:
@@ -56,10 +56,10 @@ def test_image_api() -> bool:
         return False
 
 
-# Bike context builders
+# bike context — compact summary sent to the manager agent
 
 def _bike_context(row: pd.Series) -> str:
-    # Compact one-liner with key fields + short campaign history
+    # one-liner with key fields, past campaign history, and kb insights
     color = row.get("color", "")
     color_str = f", Color: {color}" if pd.notna(color) and color else ""
     km = row["km_ridden"]
@@ -75,6 +75,7 @@ def _bike_context(row: pd.Series) -> str:
         f"{color_str}{desc_str}"
     )
 
+    # append past campaign attempts so the manager avoids repeating angles
     history = load_bike_campaign_history(int(row["id"]))
     if history:
         past = []
@@ -85,7 +86,7 @@ def _bike_context(row: pd.Series) -> str:
             past.append(f"#{h.get('trial_num','?')}: {angle} | tone={tone} | audience={audience}")
         line += f"\n  PAST ({len(history)}x): " + " // ".join(past)
 
-    # Knowledge base: what worked for similar bikes (same brand or category)
+    # append kb insights — what worked for similar bikes (same brand or category)
     brand = str(row.get("brand", ""))
     category = str(row.get("category", ""))
     try:
@@ -99,7 +100,7 @@ def _bike_context(row: pd.Series) -> str:
 
 
 def _bike_image_context(row: pd.Series) -> str:
-    # Visual details used in image generation prompts
+    # visual details passed to image generation prompts
     parts = [f"{row['brand']} {row['title']}"]
     cat = row.get("category", "")
     if pd.notna(cat) and cat:
@@ -119,11 +120,14 @@ def _bike_image_context(row: pd.Series) -> str:
     return ", ".join(parts)
 
 
+# helpers
+
 def _slug(title: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")[:40]
 
 
 def _parse_json_response(raw: str, step_name: str) -> list[dict] | None:
+    # strip markdown fences and parse json array
     text = raw.strip()
     if text.startswith("```"):
         text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
@@ -144,7 +148,7 @@ def trial_output_dir(trial_num: int) -> Path:
     return d
 
 
-# Image download (with disk cache)
+# image download — caches to disk so repeat runs skip the download
 
 def _download_image(url: str) -> bytes | None:
     if not url:
@@ -174,7 +178,7 @@ def _mime_from_url(url: str) -> str:
     return "image/webp"
 
 
-# Sale reason — short note on why a bike sold
+# sale reason — asks llm why a bike likely sold
 
 def summarize_sale_reason(bike_row: pd.Series, last_campaign: dict,
                           campaigns_run: int) -> str:
@@ -217,7 +221,7 @@ def summarize_sale_reason(bike_row: pd.Series, last_campaign: dict,
         return f"(LLM error: {e})"
 
 
-# Marketing Manager agent — returns [] on failure
+# marketing manager — picks bikes and writes briefs, returns [] on failure
 
 MAX_RETRIES = 3
 
@@ -254,7 +258,7 @@ def run_manager_agent(bikes_df: pd.DataFrame) -> list[dict]:
     return []
 
 
-# Marketer agent — processes briefs in batches, skips failed batches
+# marketer — takes briefs, produces content in batches of 5
 
 MARKETER_BATCH_SIZE = 5
 
@@ -314,7 +318,7 @@ def run_marketer_agent(briefs: list[dict], bikes_df: pd.DataFrame) -> list[dict]
     return all_results
 
 
-# Image generation — skips failures, never crashes
+# image generation — generates urban + nature ads per bike, skips failures
 
 def generate_images(content_list: list[dict], bikes_df: pd.DataFrame,
                     trial_num: int) -> dict:
@@ -340,12 +344,14 @@ def generate_images(content_list: list[dict], bikes_df: pd.DataFrame,
         folder = base_dir / f"bike_{bid}_{_slug(title)}"
         folder.mkdir(parents=True, exist_ok=True)
 
+        # save the content brief as json for reference
         try:
             brief_path = folder / "content.json"
             brief_path.write_text(json.dumps(item, indent=2))
         except Exception:
             pass
 
+        # download the product image to use as visual reference
         bike_image_url = image_url_lookup.get(bid, "")
         bike_image_bytes = _download_image(bike_image_url)
         has_ref = bike_image_bytes is not None
@@ -363,6 +369,8 @@ def generate_images(content_list: list[dict], bikes_df: pd.DataFrame,
                 contents = []
                 brand = visual.split(",")[0].split()[0]
                 brand_inst = prompts.BRAND_INSTRUCTION.format(brand=brand)
+
+                # if we have a reference photo, include it for style matching
                 if has_ref:
                     contents.append(genai_types.Part.from_bytes(
                         data=bike_image_bytes,
@@ -387,6 +395,8 @@ def generate_images(content_list: list[dict], bikes_df: pd.DataFrame,
                         response_modalities=["IMAGE", "TEXT"],
                     ),
                 )
+
+                # extract the generated image from the response
                 image_bytes = None
                 for part in response.candidates[0].content.parts:
                     if part.inline_data and part.inline_data.mime_type.startswith("image/"):
