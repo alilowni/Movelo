@@ -17,6 +17,7 @@ output/
 inventory.csv
 campaigns.csv
 knowledge_base.csv
+*.xlsx
 
 # Legacy name (in case leftover)
 trials_log.csv
