@@ -247,6 +247,11 @@ if run_clicked:
 
 if page == "🗄️ Bike Inventory":
     st.title("Bike Inventory")
+    with st.expander("About this page"):
+        st.markdown(
+            "Your full bike catalog with live scoring. "
+            "Toggle **Risky bikes** to see which ones need marketing attention."
+        )
     bikes = get_bikes()
 
     n_sold = len(bikes[bikes["status"] == "sold"])
@@ -367,11 +372,25 @@ if page == "🗄️ Bike Inventory":
             else:
                 st.info("Sales happen automatically at the end of each campaign.")
 
+    st.info(
+        "**Production roadmap** — In a real deployment this inventory connects to your "
+        "POS or warehouse system via API (e.g. Shopify, Lightspeed). The scoring formula "
+        "currently uses price, mileage, condition, and age with static weights; these would "
+        "be replaced by a trained model once enough sales data is collected. A *popularity* "
+        "signal (page views, saves, test-ride requests) can be added as an extra weight to "
+        "reflect real demand."
+    )
+
 
 # Page: Campaigns
 
 elif page == "📣 Campaigns":
     st.title("Marketing Campaigns")
+    with st.expander("About this page"):
+        st.markdown(
+            "Every campaign your AI agents have run. "
+            "Switch between a per-campaign view and a per-bike journey to track what was tried."
+        )
     trials = get_campaigns()
     bikes_df = get_bikes()
 
@@ -431,11 +450,25 @@ elif page == "📣 Campaigns":
                 for _, row in bike_trials.iterrows():
                     _render_campaign_card(row, bikes_df)
 
+    st.info(
+        "**Production roadmap** — Campaigns are currently triggered manually from the sidebar. "
+        "In production, a scheduler (cron, Airflow, or a simple Cloud Function) would run campaigns "
+        "on a cadence (e.g. daily). Each campaign's generated content (captions, emails, images) "
+        "would be pushed directly to publishing APIs — Meta Business Suite for Instagram, "
+        "an ESP like Mailchimp or Brevo for emails. A/B test results and engagement metrics "
+        "would feed back into the scoring model to close the loop."
+    )
+
 
 # Page: Analytics
 
 elif page == "📊 Analytics":
     st.title("Analytics")
+    with st.expander("About this page"):
+        st.markdown(
+            "High-level trends across all campaigns. "
+            "Track how many bikes are being targeted, sold over time, and which brands get the most attention."
+        )
     bikes_df = get_bikes()
     trials = get_campaigns()
     joined = get_joined()
@@ -551,16 +584,24 @@ elif page == "📊 Analytics":
         show_cols += ["trial_num", "date", "selling_angle", "actions"]
     st.dataframe(display_joined[show_cols], width="stretch", hide_index=True)
 
+    st.info(
+        "**Production roadmap** — These charts currently rely on internal simulation data. "
+        "In production, analytics would ingest real engagement metrics (impressions, clicks, CTR) "
+        "from ad platforms and email providers. Conversion tracking (test-ride bookings, purchases) "
+        "would connect to the CRM, enabling ROI calculations per campaign and per bike. "
+        "Dashboards could be migrated to a BI tool like Metabase or Looker for team-wide access."
+    )
+
 
 # Page: Knowledge Base
 
 elif page == "🧠 Knowledge Base":
     st.title("Sales Knowledge Base")
-    st.caption(
-        "Short notes on **why each sold bike likely sold** — captured automatically "
-        "the moment a bike sells. Use this to spot what works so future campaigns "
-        "can lean into it."
-    )
+    with st.expander("About this page"):
+        st.markdown(
+            "Automatic insights on **why each bike sold**. "
+            "The AI captures a short note per sale — the manager agent reads these to improve future campaigns."
+        )
 
     kb = get_knowledge_base()
 
@@ -630,3 +671,12 @@ elif page == "🧠 Knowledge Base":
             "reason_note",
         ] if c in view.columns]
         st.dataframe(view[kb_cols], width="stretch", hide_index=True)
+
+    st.info(
+        "**Production roadmap** — The knowledge base is currently a flat CSV with simple brand/category "
+        "retrieval. In production, this would be stored in a vector database (Pinecone, Weaviate, or "
+        "pgvector) with embeddings, enabling semantic retrieval — e.g. \"what worked for expensive "
+        "trekking bikes in winter?\". The sale-reason agent would also ingest real buyer feedback "
+        "(reviews, survey responses) instead of inferring reasons from campaign data alone. "
+        "Over time this becomes the core learning loop: sell → learn → improve → sell better."
+    )
