@@ -361,3 +361,4 @@ def generate_images(content_list: list[dict], bikes_df: pd.DataFrame,
         results[bid] = {"folder": str(folder), "images": paths}
 
     return results
+
