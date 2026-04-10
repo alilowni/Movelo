@@ -24,6 +24,9 @@ init_working_files()
 
 st.set_page_config(page_title="Movelo Dashboard", page_icon="🚲", layout="wide")
 
+if "campaign_running" not in st.session_state:
+    st.session_state.campaign_running = False
+
 
 @st.cache_data(ttl=10)
 def get_bikes() -> pd.DataFrame:
@@ -116,7 +119,9 @@ def _run_campaign():
         st.toast("All bikes are already sold.", icon="✅")
         return
 
-    with st.status("Running campaign...", expanded=True) as status:
+    st.session_state.campaign_running = True
+
+    with st.status("Running campaign — please wait...", expanded=True) as status:
         result = subprocess.run(
             [sys.executable, "main.py"],
             capture_output=True, text=True,
@@ -137,6 +142,7 @@ def _run_campaign():
             st.code(raw, language=None)
             status.update(label="Campaign failed", state="error")
 
+    st.session_state.campaign_running = False
     st.cache_data.clear()
 
 
@@ -202,8 +208,13 @@ def _render_campaign_card(row: pd.Series, bikes_df: pd.DataFrame) -> None:
 
 # Sidebar
 
+running = st.session_state.campaign_running
+
 st.sidebar.title("Movelo")
 st.sidebar.caption("Refurbished Bike Marketing Dashboard")
+
+if running:
+    st.sidebar.warning("⏳ Campaign running — please wait...")
 
 page = st.sidebar.radio(
     "Navigate",
@@ -214,14 +225,15 @@ page = st.sidebar.radio(
         "Dashboards and monitoring for your campaigns",
         "Learned insights — gets smarter with every sale",
     ],
+    disabled=running,
 )
 
 st.sidebar.markdown("---")
 sb1, sb2 = st.sidebar.columns(2)
 with sb1:
-    refresh_clicked = st.button("🔄 Refresh", use_container_width=True)
+    refresh_clicked = st.button("🔄 Refresh", use_container_width=True, disabled=running)
 with sb2:
-    run_clicked = st.button("▶ Campaign", type="primary", use_container_width=True)
+    run_clicked = st.button("▶ Campaign", type="primary", use_container_width=True, disabled=running)
 
 if refresh_clicked:
     st.cache_data.clear()
