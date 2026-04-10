@@ -1,18 +1,21 @@
-# Pipeline factory — chains named steps, passes a shared context dict.
+# pipeline factory — chains named steps, passes a shared context dict.
+# steps can be added, inserted, or removed to customize the flow.
 
 from __future__ import annotations
 
 import time
 from typing import Callable
 
+# each step takes a context dict and returns it (possibly modified)
 StepFn = Callable[[dict], dict]
 
 
 class Pipeline:
-    # Ordered sequence of named steps sharing a mutable context dict.
 
     def __init__(self) -> None:
         self._steps: list[tuple[str, StepFn]] = []
+
+    # step registration
 
     def register_step(self, name: str, fn: StepFn) -> "Pipeline":
         self._steps.append((name, fn))
@@ -39,6 +42,8 @@ class Pipeline:
     @property
     def step_names(self) -> list[str]:
         return [n for n, _ in self._steps]
+
+    # execution — runs all steps in order, prints timing per step
 
     def run(self, context: dict | None = None) -> dict:
         ctx = context if context is not None else {}
