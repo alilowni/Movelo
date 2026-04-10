@@ -113,6 +113,9 @@ def _parse_pipeline_log(raw: str) -> tuple[str, str]:
 # Campaign runner
 
 def _run_campaign():
+    if st.session_state.campaign_running:
+        return
+
     bikes_df = get_bikes()
     n_avail = len(bikes_df[bikes_df["status"] != "sold"])
     if n_avail == 0:
@@ -122,28 +125,33 @@ def _run_campaign():
     st.session_state.campaign_running = True
 
     with st.status("Running campaign — please wait...", expanded=True) as status:
-        result = subprocess.run(
-            [sys.executable, "main.py"],
-            capture_output=True, text=True,
-            cwd=str(Path(__file__).parent), timeout=600,
-        )
-        raw = result.stdout or ""
-        if result.stderr:
-            raw += "\n" + result.stderr
+        try:
+            result = subprocess.run(
+                [sys.executable, "main.py"],
+                capture_output=True, text=True,
+                cwd=str(Path(__file__).parent), timeout=600,
+            )
+            raw = result.stdout or ""
+            if result.stderr:
+                raw += "\n" + result.stderr
 
-        if result.returncode == 0:
-            log, label = _parse_pipeline_log(raw)
-            st.code(log, language=None)
-            with st.expander("Raw output"):
+            if result.returncode == 0:
+                log, label = _parse_pipeline_log(raw)
+                st.code(log, language=None)
+                with st.expander("Raw output"):
+                    st.code(raw, language=None)
+                status.update(label=label, state="complete", expanded=False)
+                st.toast("Campaign complete!", icon="✅")
+            else:
                 st.code(raw, language=None)
-            status.update(label=label, state="complete", expanded=False)
-            st.toast("Campaign complete!", icon="✅")
-        else:
-            st.code(raw, language=None)
+                status.update(label="Campaign failed", state="error")
+        except Exception as e:
+            st.error(f"Campaign error: {e}")
             status.update(label="Campaign failed", state="error")
 
     st.session_state.campaign_running = False
     st.cache_data.clear()
+    st.rerun()
 
 
 # Campaign card
