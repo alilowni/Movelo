@@ -253,11 +253,11 @@ if run_clicked:
 st.sidebar.markdown("---")
 st.sidebar.caption(
     "Made with ❤️ at PON Hackathon  \n"
-    "John Rock · john.rock@gmail.com  \n"
-    "Xander Lowni · Datalab  \n"
-    "Sarah Peeters · sarah.p@volkswagen.nl  \n"
-    "Tom de Vries · tom.devries@pon.com  \n"
-    "Lisa Jansen · lisa.j@datalab.nl"
+    "Karen Oskam · karen.oskam@pon.com  \n"
+    "Ali Lowni alowni@vwpfs.com  \n"
+    "Aron Tjhin · aron.tjhin@pon.com  \n"
+    "Guus Kroon · guus.kroon@pon.com  \n"
+    "Zeger Knops · zeger.knops@pon.com"
 )
 
 
