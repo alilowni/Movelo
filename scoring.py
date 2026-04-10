@@ -1,8 +1,5 @@
-# Bike scoring, campaign log I/O, and data helpers.
-#
-# inventory.csv gets two runtime columns:
-#   status         — "available" | "sold"
-#   days_on_market — int, incremented each campaign
+# bike scoring, campaign log i/o, knowledge base, and data helpers.
+# inventory.csv gets two runtime columns: status and days_on_market.
 
 import os
 import random
@@ -14,7 +11,7 @@ import numpy as np
 import config as cfg
 
 
-# Init — copy seed to working files if they don't exist yet
+# init — copy seed to working files if they don't exist yet
 
 def init_working_files() -> None:
     if not os.path.exists(cfg.CSV_PATH):
@@ -31,7 +28,7 @@ def init_working_files() -> None:
         pd.DataFrame(columns=KB_COLUMNS).to_csv(cfg.KNOWLEDGE_BASE_PATH, index=False)
 
 
-# Column definitions
+# column definitions for csv files
 
 KB_COLUMNS = [
     "bike_id", "trial_num", "date", "title", "brand", "category",
@@ -47,20 +44,20 @@ CAMPAIGN_COLUMNS = [
 ]
 
 
-# Score formula weights — must sum to 1.0
-# Adjust with your sales team. "popularity" can be added later.
+# score formula weights — must sum to 1.0
+# adjust with your sales team. "popularity" can be added later.
 WEIGHTS = {
-    "price":     0.30,   # higher price -> harder to sell
-    "mileage":   0.30,   # more km -> harder to sell
-    "condition": 0.20,   # worse condition -> harder to sell
-    "age":       0.20,   # older -> harder to sell
-    # "popularity": 0.0  # placeholder for human scoring
+    "price":     0.30,
+    "mileage":   0.30,
+    "condition": 0.20,
+    "age":       0.20,
 }
 
+# each day on market adds this to the score
 DAY_PENALTY_PER_DAY = 0.30
 
 
-# Internal helpers
+# internal helpers — ensure runtime columns exist
 
 def _ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
     if "status" not in df.columns:
@@ -86,7 +83,7 @@ def _persist_columns(csv_path: str = None) -> None:
         df.to_csv(csv_path, index=False)
 
 
-# Scoring — each sub-score is 0-5, higher = harder to sell
+# scoring — each sub-score is 0-5, higher = harder to sell
 
 def _score_price(df: pd.DataFrame) -> pd.Series:
     p_min, p_max = df["price"].min(), df["price"].max()
@@ -96,7 +93,6 @@ def _score_price(df: pd.DataFrame) -> pd.Series:
 
 
 def _score_mileage(df: pd.DataFrame) -> pd.Series:
-    # Unknown km defaults to mid (3)
     km = df["km_ridden"].copy()
     km_known = km.dropna()
     if km_known.empty or km_known.max() == km_known.min():
@@ -118,10 +114,10 @@ def _score_age(df: pd.DataFrame) -> pd.Series:
     return df["year"].map(mapping).fillna(4)
 
 
+# load inventory and compute sell difficulty score
+# formula: score = clamp(round(base + day_penalty), 0, 5)
+
 def load_and_score(csv_path: str = None) -> pd.DataFrame:
-    # base = weighted sum of price + mileage + condition + age
-    # penalty = days_on_market * DAY_PENALTY_PER_DAY
-    # final = clamp(round(base + penalty), 0, 5)
     csv_path = csv_path or cfg.CSV_PATH
     _persist_columns(csv_path)
     df = pd.read_csv(csv_path)
@@ -135,17 +131,13 @@ def load_and_score(csv_path: str = None) -> pd.DataFrame:
         + w["age"]     * _score_age(df)
     )
 
-    # Future: subtract popularity (popular bikes are easier to sell)
-    # if "popularity" in df.columns:
-    #     base -= w["popularity"] * df["popularity"].fillna(0)
-
     penalty = df["days_on_market"] * DAY_PENALTY_PER_DAY
     df["sell_difficulty_score"] = (base + penalty).round().astype(int).clip(0, 5)
     return df
 
 
 def filter_hard_to_sell(df: pd.DataFrame, threshold: int = None) -> pd.DataFrame:
-    # Recursively lowers threshold if nothing matches
+    # lowers threshold recursively if no bikes match
     threshold = threshold if threshold is not None else cfg.HARD_SELL_THRESHOLD
     available = df[df["status"] != "sold"]
     hard = available[available["sell_difficulty_score"] >= threshold]
@@ -154,7 +146,7 @@ def filter_hard_to_sell(df: pd.DataFrame, threshold: int = None) -> pd.DataFrame
     return hard
 
 
-# Status management
+# status management
 
 def mark_bike_sold(bike_id: int, csv_path: str = None) -> None:
     csv_path = csv_path or cfg.CSV_PATH
@@ -173,7 +165,7 @@ def mark_bike_available(bike_id: int, csv_path: str = None) -> None:
 
 
 def advance_day(csv_path: str = None) -> None:
-    # +1 day for every available bike. Called once per campaign.
+    # +1 day for every available bike, called once per campaign
     csv_path = csv_path or cfg.CSV_PATH
     df = pd.read_csv(csv_path)
     df = _ensure_columns(df)
@@ -182,8 +174,8 @@ def advance_day(csv_path: str = None) -> None:
     df.to_csv(csv_path, index=False)
 
 
-# Sales simulation
-# P(sold) = AUTO_SELL_PROBABILITY * (6 - score) / 5
+# sales simulation — probability based on score
+# p(sold) = auto_sell_probability * (6 - score) / 5
 
 def simulate_sales(bike_ids: list[int], scores: dict[int, int],
                    trial_num: int, csv_path: str = None,
@@ -214,9 +206,10 @@ def simulate_sales(bike_ids: list[int], scores: dict[int, int],
     return sold
 
 
+# sale insights — asks llm why each sold bike likely sold, writes to kb
+
 def _record_sale_insights(sold_ids: list[int], trial_num: int,
                           csv_path: str, trials_path: str) -> None:
-    # Ask LLM why each sold bike likely sold, save to knowledge base
     try:
         from agents import summarize_sale_reason
     except Exception as e:
@@ -252,7 +245,7 @@ def _record_sale_insights(sold_ids: list[int], trial_num: int,
                     print(f"  WARN: LLM sale reason failed for bike {bid}: {e}")
                     note = ""
 
-            # Fallback: if LLM returned nothing useful, build a note from the data
+            # fallback — build a data-based note if llm failed
             if not note or note.startswith("("):
                 angle = last.get("selling_angle", "")
                 audience = last.get("target_audience", "")
@@ -297,7 +290,7 @@ def _record_sale_insights(sold_ids: list[int], trial_num: int,
         print(f"  WARN: no KB rows built for sold bikes {sold_ids}")
 
 
-# Knowledge base
+# knowledge base — stores why bikes sold, used by manager for learning
 
 def _ensure_knowledge_base(path: str = None) -> None:
     path = path or cfg.KNOWLEDGE_BASE_PATH
@@ -315,8 +308,8 @@ def load_knowledge_base(path: str = None) -> pd.DataFrame:
 
 
 def retrieve_kb_insights(brand: str, category: str, path: str = None) -> list[str]:
-    # Simple retrieval: find KB entries matching the same brand or category.
-    # Returns compact one-liner strings the Manager can use as context.
+    # simple retrieval — finds entries matching same brand or category
+    # returns compact strings the manager can use as context
     kb = load_knowledge_base(path)
     if kb.empty:
         return []
@@ -349,8 +342,11 @@ def append_knowledge_base(records: list[dict], path: str = None) -> None:
         print(f"  WARN: could not append to knowledge base: {e}")
 
 
+# campaign log helpers
+
 def _stamp_sold_in_log(sold_ids: list[int], trial_num: int,
                        path: str = None) -> None:
+    # marks bikes as sold in the campaign they were sold in
     path = path or cfg.CAMPAIGNS_PATH
     df = pd.read_csv(path)
     if "sold_in_campaign" not in df.columns:
@@ -368,7 +364,7 @@ def unsold_bike_ids(csv_path: str = None) -> list[int]:
     return df[df["status"] != "sold"]["id"].tolist()
 
 
-# Campaigns log
+# campaigns log — read/write campaign records
 
 def _ensure_campaigns(path: str = None) -> None:
     path = path or cfg.CAMPAIGNS_PATH
@@ -423,15 +419,15 @@ def join_bikes_and_campaigns(csv_path: str = None,
     return bikes.merge(campaigns, left_on="id", right_on="bike_id", how="left")
 
 
-# Image evaluations — external banners + landing pages
+# image evaluations — banner images + landing pages from cdn
 
 CDN_BASE = "https://hackathon-movelo-ads.digitalsolutions.workers.dev"
 BANNERS_DIR = os.path.join(os.path.dirname(__file__), "banners")
 
 
 def load_image_evaluations(path: str = None) -> dict:
-    # Returns {bike_num: {"images": [{"path":..., "html_url":...}, ...]}}.
-    # Images are local files in banners/, html_url is set only if CDN has it.
+    # returns {bike_num: {"images": [{"path":..., "html_url":...}, ...]}}
+    # images are local files in banners/, html_url set only if cdn has it
     path = path or cfg.IMAGE_EVAL_PATH
     if not os.path.exists(path):
         return {}
@@ -440,6 +436,7 @@ def load_image_evaluations(path: str = None) -> dict:
     except Exception:
         return {}
 
+    # keep only rows where bike id contains underscore (evaluated entries)
     df = df[df["Bike id"].astype(str).str.contains("_", na=False)].copy()
     if df.empty:
         return {}
@@ -452,7 +449,7 @@ def load_image_evaluations(path: str = None) -> dict:
     df["bike_num"] = bike_num_str[valid].astype(int)
     df["Score"] = pd.to_numeric(df["Score"], errors="coerce").fillna(0)
 
-    # Fetch hosted file list from CDN
+    # fetch hosted file list from cdn
     hosted_images: dict[str, str] = {}
     hosted_html: set[str] = set()
     try:
@@ -472,12 +469,13 @@ def load_image_evaluations(path: str = None) -> dict:
     result: dict = {}
 
     for bike_num, group in df.groupby("bike_num"):
-        # Filter to rows whose Image Name is hosted on CDN
+        # only keep images that are hosted on the cdn
         mask = group["Image Name"].fillna("").astype(str).isin(hosted_images)
         group = group[mask.values].copy()
         if group.empty:
             continue
 
+        # pick top 3 by score
         top3 = group.nlargest(3, "Score")
         images = []
         for _, row in top3.iterrows():
@@ -486,7 +484,7 @@ def load_image_evaluations(path: str = None) -> dict:
             ext = os.path.splitext(remote_file)[1] or ".png"
             local_path = os.path.join(BANNERS_DIR, f"{name}{ext}")
 
-            # Download if not cached
+            # download if not cached locally
             if not os.path.exists(local_path):
                 try:
                     import requests as req
