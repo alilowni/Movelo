@@ -1,4 +1,4 @@
-# Central config — all tunables, driven by .env
+# central config — all tunables loaded from .env
 
 import os
 from dotenv import load_dotenv
@@ -18,23 +18,23 @@ def _env_float(key: str, default: float) -> float:
     return float(_env(key, str(default)))
 
 
-# API
+# api
 GOOGLE_API_KEY = _env("GOOGLE_API_KEY", "")
 
-# Models
+# models
 LLM_MODEL = _env("LLM_MODEL", "gemini-2.0-flash")
 IMAGE_MODEL = _env("IMAGE_MODEL", "gemini-2.5-flash-image")
 
-# Temperatures
+# agent creativity — higher = more varied output
 MANAGER_TEMPERATURE = _env_float("MANAGER_TEMPERATURE", 0.4)
 MARKETER_TEMPERATURE = _env_float("MARKETER_TEMPERATURE", 0.7)
 
-# Scoring
-HARD_SELL_THRESHOLD = _env_int("HARD_SELL_THRESHOLD", 3)
-AUTO_SELL_PROBABILITY = _env_float("AUTO_SELL_PROBABILITY", 0.40)
-MAX_BIKES_PER_CAMPAIGN = _env_int("MAX_BIKES_PER_CAMPAIGN", 10)
+# scoring and sales simulation
+HARD_SELL_THRESHOLD = _env_int("HARD_SELL_THRESHOLD", 3)          # bikes >= this get targeted
+AUTO_SELL_PROBABILITY = _env_float("AUTO_SELL_PROBABILITY", 0.40) # base chance of sale per campaign
+MAX_BIKES_PER_CAMPAIGN = _env_int("MAX_BIKES_PER_CAMPAIGN", 10)   # caps api calls per run
 
-# Paths
+# paths — auto-created at runtime, no need to change
 SEED_CSV_PATH = _env("SEED_CSV_PATH", "sample_data_movelo_links.csv")
 CSV_PATH = _env("CSV_PATH", "inventory.csv")
 CAMPAIGNS_PATH = _env("CAMPAIGNS_PATH", "campaigns.csv")
