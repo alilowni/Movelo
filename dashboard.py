@@ -283,17 +283,17 @@ if page == "🗄️ Bike Inventory":
     col3.metric("Risky", n_risky)
     col4.metric("Avg price", f"€{bikes['price'].mean():.0f}")
 
-    # View toggle + filters
-    tcol, fcol1, fcol2, fcol3 = st.columns([1.2, 1, 1, 1])
-    with tcol:
-        risky_only = st.toggle("🔴 Risky bikes", value=False,
-                                help=f"Show only bikes with score ≥ {cfg.HARD_SELL_THRESHOLD} (targeted by campaigns)")
+    # Filters
+    fcol1, fcol2, fcol3, fcol4 = st.columns(4)
     with fcol1:
         brands = st.multiselect("Brand", sorted(bikes["brand"].unique()))
     with fcol2:
         categories = st.multiselect("Category", sorted(bikes["category"].unique()))
     with fcol3:
-        show_sold = st.checkbox("Show sold bikes", value=False)
+        risky_only = st.toggle("🔴 Risky only", value=False,
+                                help=f"Score ≥ {cfg.HARD_SELL_THRESHOLD}")
+    with fcol4:
+        show_sold = st.toggle("🏷️ Sold only", value=False)
 
     filtered = bikes.copy()
     if brands:
