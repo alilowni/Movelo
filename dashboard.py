@@ -283,6 +283,8 @@ st.sidebar.caption(
     "Aron Tjhin · aron.tjhin@pon.com  \n"
     "Guus Kroon · guus.kroon@pon.com  \n"
     "Zeger Knops · zeger.knops@pon.com"
+    "  \n"
+    "[GitHub](https://github.com/alilowni/Movelo)"
 )
 
 
