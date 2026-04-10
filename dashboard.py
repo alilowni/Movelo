@@ -255,6 +255,7 @@ st.sidebar.caption(
     "Made with ❤️ at PON Hackathon  \n"
     "Karen Oskam · karen.oskam@pon.com  \n"
     "Ali Lowni alowni@vwpfs.com  \n"
+    "John Broekhof · john.broekhof@pon.com  \n"
     "Aron Tjhin · aron.tjhin@pon.com  \n"
     "Guus Kroon · guus.kroon@pon.com  \n"
     "Zeger Knops · zeger.knops@pon.com"
