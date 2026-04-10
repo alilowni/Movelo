@@ -421,3 +421,87 @@ def join_bikes_and_campaigns(csv_path: str = None,
     if campaigns.empty:
         return bikes
     return bikes.merge(campaigns, left_on="id", right_on="bike_id", how="left")
+
+
+# Image evaluations — external banners + landing pages
+
+CDN_BASE = "https://hackathon-movelo-ads.digitalsolutions.workers.dev"
+BANNERS_DIR = os.path.join(os.path.dirname(__file__), "banners")
+
+
+def load_image_evaluations(path: str = None) -> dict:
+    # Returns {bike_num: {"images": [{"path":..., "html_url":...}, ...]}}.
+    # Images are local files in banners/, html_url is set only if CDN has it.
+    path = path or cfg.IMAGE_EVAL_PATH
+    if not os.path.exists(path):
+        return {}
+    try:
+        df = pd.read_excel(path)
+    except Exception:
+        return {}
+
+    df = df[df["Bike id"].astype(str).str.contains("_", na=False)].copy()
+    if df.empty:
+        return {}
+
+    bike_num_str = df["Bike id"].astype(str).str.split("_").str[0]
+    valid = bike_num_str.str.isdigit()
+    df = df[valid].copy()
+    if df.empty:
+        return {}
+    df["bike_num"] = bike_num_str[valid].astype(int)
+    df["Score"] = pd.to_numeric(df["Score"], errors="coerce").fillna(0)
+
+    # Fetch hosted file list from CDN
+    hosted_images: dict[str, str] = {}
+    hosted_html: set[str] = set()
+    try:
+        import requests as req
+        resp = req.get(f"{CDN_BASE}/list.json", timeout=10)
+        if resp.ok:
+            for e in resp.json():
+                bn = e.get("baseName", "")
+                if bn and e.get("image"):
+                    hosted_images[bn] = e["image"]
+                if bn and e.get("html") and e["html"] != ".html":
+                    hosted_html.add(bn)
+    except Exception:
+        pass
+
+    os.makedirs(BANNERS_DIR, exist_ok=True)
+    result: dict = {}
+
+    for bike_num, group in df.groupby("bike_num"):
+        # Filter to rows whose Image Name is hosted on CDN
+        mask = group["Image Name"].fillna("").astype(str).isin(hosted_images)
+        group = group[mask.values].copy()
+        if group.empty:
+            continue
+
+        top3 = group.nlargest(3, "Score")
+        images = []
+        for _, row in top3.iterrows():
+            name = str(row["Image Name"])
+            remote_file = hosted_images[name]
+            ext = os.path.splitext(remote_file)[1] or ".png"
+            local_path = os.path.join(BANNERS_DIR, f"{name}{ext}")
+
+            # Download if not cached
+            if not os.path.exists(local_path):
+                try:
+                    import requests as req
+                    r = req.get(f"{CDN_BASE}/{remote_file}", timeout=15)
+                    if r.ok:
+                        with open(local_path, "wb") as f:
+                            f.write(r.content)
+                except Exception:
+                    continue
+
+            if os.path.exists(local_path):
+                html_url = f"{CDN_BASE}/{name}.html" if name in hosted_html else None
+                images.append({"path": local_path, "html_url": html_url})
+
+        if images:
+            result[int(bike_num)] = {"images": images}
+
+    return result

@@ -12,6 +12,7 @@ venv/
 
 # Output (generated images, etc.)
 output/
+banners/
 
 # Working data files (generated from seed on first run)
 inventory.csv

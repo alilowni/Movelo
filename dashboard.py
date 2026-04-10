@@ -18,6 +18,7 @@ from scoring import (
     load_campaigns,
     join_bikes_and_campaigns,
     load_knowledge_base,
+    load_image_evaluations,
 )
 
 init_working_files()
@@ -46,6 +47,11 @@ def get_joined() -> pd.DataFrame:
 @st.cache_data(ttl=10)
 def get_knowledge_base() -> pd.DataFrame:
     return load_knowledge_base()
+
+
+@st.cache_data(ttl=60)
+def get_image_evals() -> dict:
+    return load_image_evaluations()
 
 
 def risk_color(score: int) -> str:
@@ -156,7 +162,8 @@ def _run_campaign():
 
 # Campaign card
 
-def _render_campaign_card(row: pd.Series, bikes_df: pd.DataFrame) -> None:
+def _render_campaign_card(row: pd.Series, bikes_df: pd.DataFrame,
+                          evals: dict | None = None) -> None:
     bid = int(row["bike_id"])
     bike_info = bikes_df[bikes_df["id"] == bid]
     title = bike_info["title"].values[0] if not bike_info.empty else f"Bike {bid}"
@@ -170,6 +177,9 @@ def _render_campaign_card(row: pd.Series, bikes_df: pd.DataFrame) -> None:
         header += " 🎉 SOLD THIS CAMPAIGN"
     elif status == "sold":
         header += " 🏷 SOLD"
+
+    bike_eval = (evals or {}).get(bid, {})
+    eval_images = bike_eval.get("images", [])
 
     with st.expander(header, expanded=True):
         st.markdown(f"**Selling angle:** {row.get('selling_angle', 'N/A')}")
@@ -212,6 +222,20 @@ def _render_campaign_card(row: pd.Series, bikes_df: pd.DataFrame) -> None:
             with img_cols[2]:
                 if has_nature:
                     st.image(str(nature_path), caption="Nature ad", width="stretch")
+
+        # Marketing assets from image evaluations
+        if eval_images:
+            st.markdown("**Marketing assets**")
+            banner_cols = st.columns(3)
+            for i, img in enumerate(eval_images[:3]):
+                with banner_cols[i]:
+                    st.image(img["path"], caption=f"Banner {i + 1}", width="stretch")
+                    if img.get("html_url"):
+                        st.markdown(
+                            f'<a href="{img["html_url"]}" target="_blank" '
+                            f'rel="noopener noreferrer">🌐 Landing page</a>',
+                            unsafe_allow_html=True,
+                        )
 
 
 # Sidebar
@@ -418,12 +442,20 @@ elif page == "📣 Campaigns":
         )
     trials = get_campaigns()
     bikes_df = get_bikes()
+    evals = get_image_evals()
 
     if trials.empty:
         st.info("No campaigns yet. Click **▶ Campaign** in the sidebar to start one.")
     else:
-        view_mode = st.radio("View by", ["Campaign", "Bike journey"],
-                             horizontal=True, label_visibility="collapsed")
+        bikes_with_assets = {bid for bid, e in evals.items() if e.get("images")}
+
+        vcol1, vcol2 = st.columns([2, 1])
+        with vcol1:
+            view_mode = st.radio("View by", ["Campaign", "Bike journey"],
+                                 horizontal=True, label_visibility="collapsed")
+        with vcol2:
+            assets_only = st.toggle("📎 Has marketing assets", value=False,
+                                     help="Show only bikes that have banners + landing page")
 
         if view_mode == "Campaign":
             trial_nums = sorted(trials["trial_num"].unique())
@@ -435,14 +467,19 @@ elif page == "📣 Campaigns":
                                               format_func=lambda x: f"Campaign {int(x)}")
 
             trial_data = trials[trials["trial_num"] == selected_trial]
+            if assets_only:
+                trial_data = trial_data[trial_data["bike_id"].astype(int).isin(bikes_with_assets)]
             trial_date = trial_data["date"].dropna().values[0] if not trial_data["date"].dropna().empty else "N/A"
-            st.markdown(f"### Campaign {int(selected_trial)} — {trial_date} — {len(trial_data)} bikes")
+            n_with_assets = len(trial_data[trial_data["bike_id"].astype(int).isin(bikes_with_assets)])
+            st.markdown(f"### Campaign {int(selected_trial)} — {trial_date} — {len(trial_data)} bikes ({n_with_assets} with assets)")
 
             for _, row in trial_data.iterrows():
-                _render_campaign_card(row, bikes_df)
+                _render_campaign_card(row, bikes_df, evals)
 
         else:
             targeted_ids = sorted(trials["bike_id"].unique())
+            if assets_only:
+                targeted_ids = [bid for bid in targeted_ids if int(bid) in bikes_with_assets]
             selected_bike = st.selectbox(
                 "Select bike to see full journey",
                 targeted_ids,
@@ -450,6 +487,7 @@ elif page == "📣 Campaigns":
                     f"[{int(x)}] "
                     f"{bikes_df[bikes_df['id']==int(x)]['title'].values[0] if not bikes_df[bikes_df['id']==int(x)].empty else x}"
                     f"{' 🏷 SOLD' if not bikes_df[bikes_df['id']==int(x)].empty and bikes_df[bikes_df['id']==int(x)]['status'].values[0]=='sold' else ''}"
+                    f"{' 📎' if int(x) in bikes_with_assets else ''}"
                 ),
             )
             bike_info = bikes_df[bikes_df["id"] == int(selected_bike)]
@@ -467,7 +505,7 @@ elif page == "📣 Campaigns":
                 st.info("No campaigns for this bike yet.")
             else:
                 for _, row in bike_trials.iterrows():
-                    _render_campaign_card(row, bikes_df)
+                    _render_campaign_card(row, bikes_df, evals)
 
     st.info(
         "**Production roadmap** — Campaigns are currently triggered manually from the sidebar. "
