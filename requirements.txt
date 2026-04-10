@@ -2,7 +2,6 @@ pandas
 langchain-google-genai
 langchain-core
 python-dotenv
-numpy
 google-genai
 requests
 streamlit
