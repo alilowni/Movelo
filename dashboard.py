@@ -1,7 +1,5 @@
-# Movelo Marketing Dashboard
-#
-# streamlit run dashboard.py
-# python main.py --dashboard
+# movelo marketing dashboard
+# run: streamlit run dashboard.py  or  python main.py --dashboard
 
 import re
 import subprocess
@@ -29,6 +27,8 @@ if "campaign_running" not in st.session_state:
     st.session_state.campaign_running = False
 
 
+# cached data loaders
+
 @st.cache_data(ttl=10)
 def get_bikes() -> pd.DataFrame:
     return load_and_score()
@@ -54,6 +54,8 @@ def get_image_evals() -> dict:
     return load_image_evaluations()
 
 
+# display helpers
+
 def risk_color(score: int) -> str:
     if score >= 4:
         return "🔴"
@@ -66,10 +68,9 @@ def status_badge(status: str) -> str:
     return "🏷 SOLD" if status == "sold" else "✅ Available"
 
 
-# Pipeline log parser
+# pipeline log parser — turns raw main.py output into clean summary
 
 def _parse_pipeline_log(raw: str) -> tuple[str, str]:
-    # Returns (clean_log, summary_label)
     lines = []
     campaign_num = "?"
     sold_text = "no sales"
@@ -116,7 +117,7 @@ def _parse_pipeline_log(raw: str) -> tuple[str, str]:
     return log, label
 
 
-# Campaign runner
+# campaign runner — executes main.py as subprocess, locks ui during run
 
 def _run_campaign():
     if st.session_state.campaign_running:
@@ -160,7 +161,7 @@ def _run_campaign():
     st.rerun()
 
 
-# Campaign card
+# campaign card — reusable component for both campaign and bike journey views
 
 def _render_campaign_card(row: pd.Series, bikes_df: pd.DataFrame,
                           evals: dict | None = None) -> None:
@@ -205,6 +206,7 @@ def _render_campaign_card(row: pd.Series, bikes_df: pd.DataFrame,
             st.markdown("**Instagram caption**")
             st.code(str(caption), language=None)
 
+        # ai-generated images (product photo + urban/nature ads)
         urban_path = row.get("urban_image_path", "")
         nature_path = row.get("nature_image_path", "")
         has_urban = pd.notna(urban_path) and urban_path and Path(urban_path).exists()
@@ -223,7 +225,7 @@ def _render_campaign_card(row: pd.Series, bikes_df: pd.DataFrame,
                 if has_nature:
                     st.image(str(nature_path), caption="Nature ad", width="stretch")
 
-        # Marketing assets from image evaluations
+        # banner marketing assets from image evaluations
         if eval_images:
             st.markdown("**Marketing assets**")
             banner_cols = st.columns(3)
@@ -242,7 +244,7 @@ def _render_campaign_card(row: pd.Series, bikes_df: pd.DataFrame,
                         )
 
 
-# Sidebar
+# sidebar
 
 running = st.session_state.campaign_running
 
@@ -292,7 +294,7 @@ st.sidebar.caption(
 )
 
 
-# Page: Bike Inventory
+# page: bike inventory
 
 if page == "🗄️ Bike Inventory":
     st.title("Bike Inventory")
@@ -313,7 +315,7 @@ if page == "🗄️ Bike Inventory":
     col3.metric("Risky", n_risky)
     col4.metric("Avg price", f"€{bikes['price'].mean():.0f}")
 
-    # Filters
+    # filters
     fcol1, fcol2, fcol3, fcol4 = st.columns(4)
     with fcol1:
         brands = st.multiselect("Brand", sorted(bikes["brand"].unique()))
@@ -364,7 +366,7 @@ if page == "🗄️ Bike Inventory":
         },
     )
 
-    # Score explanation
+    # score explanation
     with st.expander("How is the score calculated?"):
         st.markdown(
             f"Each bike gets a **sell difficulty score** from 0 (easy) to 5 (hard). "
@@ -382,6 +384,7 @@ if page == "🗄️ Bike Inventory":
             f"A *popularity* weight will be added later based on human input from the sales team."
         )
 
+    # bike detail view
     st.markdown("### Bike Details")
     bike_ids = filtered["id"].tolist()
     if bike_ids:
@@ -437,7 +440,7 @@ if page == "🗄️ Bike Inventory":
     )
 
 
-# Page: Campaigns
+# page: campaigns
 
 elif page == "📣 Campaigns":
     st.title("Marketing Campaigns")
@@ -463,6 +466,7 @@ elif page == "📣 Campaigns":
             assets_only = st.toggle("📎 Has marketing assets", value=False,
                                      help="Show only bikes that have banners + landing page")
 
+        # campaign view — browse by campaign number
         if view_mode == "Campaign":
             trial_nums = sorted(trials["trial_num"].unique())
             tcol1, tcol2 = st.columns([1, 3])
@@ -482,6 +486,7 @@ elif page == "📣 Campaigns":
             for _, row in trial_data.iterrows():
                 _render_campaign_card(row, bikes_df, evals)
 
+        # bike journey view — browse by bike across all campaigns
         else:
             targeted_ids = sorted(trials["bike_id"].unique())
             if assets_only:
@@ -523,7 +528,7 @@ elif page == "📣 Campaigns":
     )
 
 
-# Page: Analytics
+# page: analytics
 
 elif page == "📊 Analytics":
     st.title("Analytics")
@@ -546,6 +551,7 @@ elif page == "📊 Analytics":
     targeted = trials["bike_id"].nunique() if not trials.empty else 0
     col4.metric("Bikes marketed", targeted)
 
+    # risky bikes table
     st.markdown("### Risky bikes (available, score >= 4)")
     risky = bikes_df[(bikes_df["sell_difficulty_score"] >= 4) & (bikes_df["status"] != "sold")].copy()
 
@@ -577,7 +583,7 @@ elif page == "📊 Analytics":
         for _, r in never_marketed.iterrows():
             st.markdown(f"- **[{r['id']}] {r['title']}** — €{r['price']:.0f}, score {r['sell_difficulty_score']}, {r['days_on_market']} days")
 
-    # Trend charts
+    # trend charts
     if not trials.empty and "date" in trials.columns:
         st.markdown("### Trends")
         sold_flags = trials[trials["sold_in_campaign"] == "yes"].copy() if "sold_in_campaign" in trials.columns else pd.DataFrame()
@@ -618,6 +624,7 @@ elif page == "📊 Analytics":
         }).set_index("Status")
         st.bar_chart(snap)
 
+    # brand frequency
     st.markdown("### Marketing frequency by brand")
     if not trials.empty:
         brand_merge = trials.merge(bikes_df[["id", "brand"]], left_on="bike_id", right_on="id", how="left")
@@ -625,6 +632,7 @@ elif page == "📊 Analytics":
         brand_counts = brand_counts.sort_values("campaigns", ascending=False)
         st.bar_chart(brand_counts.set_index("brand")["campaigns"])
 
+    # full joined table
     st.markdown("### Full joined table")
     fcol1, fcol2 = st.columns(2)
     with fcol1:
@@ -656,7 +664,7 @@ elif page == "📊 Analytics":
     )
 
 
-# Page: Knowledge Base
+# page: knowledge base
 
 elif page == "🧠 Knowledge Base":
     st.title("Sales Knowledge Base")
@@ -683,6 +691,7 @@ elif page == "🧠 Knowledge Base":
         st.markdown("### Latest insights")
         kb_sorted = kb.sort_values("trial_num", ascending=False)
 
+        # filters
         fc1, fc2 = st.columns(2)
         with fc1:
             brand_filter = st.multiselect(
@@ -699,6 +708,7 @@ elif page == "🧠 Knowledge Base":
         if tone_filter:
             view = view[view["tone"].isin(tone_filter)]
 
+        # insight cards
         for _, row in view.iterrows():
             r = row.to_dict()
             header = (
