@@ -1,200 +1,293 @@
+# AI agents — manager, marketer, image gen, sale reason analysis.
+
+import hashlib
 import json
 import re
 import sys
 from pathlib import Path
 
 import pandas as pd
+import requests
 from google import genai
+from google.genai import types as genai_types
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import SystemMessage, HumanMessage
 
-from scoring import get_trial_columns
+import config as cfg
+import prompts
+from scoring import load_bike_campaign_history
 
-OUTPUT_DIR = Path("output")
+OUTPUT_DIR = Path(cfg.OUTPUT_DIR)
+IMAGE_CACHE_DIR = OUTPUT_DIR / ".image_cache"
 
 
 def _make_llm(temperature: float = 0.7) -> ChatGoogleGenerativeAI:
-    return ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=temperature)
+    return ChatGoogleGenerativeAI(model=cfg.LLM_MODEL, temperature=temperature)
 
 
-def _bike_summary(row: pd.Series) -> str:
-    """Context string for a single bike."""
-    parts = [
-        f"ID: {row['id']}",
-        f"Title: {row['title']}",
-        f"Brand: {row['brand']}",
-        f"Category: {row['category']}",
-        f"Price: EUR {row['price']:.0f}",
-        f"Condition: {row['condition']}",
-        f"KM ridden: {row['km_ridden'] if pd.notna(row['km_ridden']) else 'N/A'}",
-        f"Year: {int(row['year']) if pd.notna(row['year']) else 'N/A'}",
-        f"Frame size: {row['frame_size']}",
-        f"Sell difficulty score: {row['sell_difficulty_score']}",
-    ]
+# API health checks
+
+def test_llm_api() -> bool:
+    try:
+        llm = _make_llm(temperature=0.0)
+        resp = llm.invoke([HumanMessage(content="Reply with exactly: OK")])
+        return "OK" in resp.content.upper()
+    except Exception as e:
+        print(f"  LLM test failed: {e}")
+        return False
+
+
+def test_image_api() -> bool:
+    try:
+        client = genai.Client()
+        resp = client.models.generate_content(
+            model=cfg.IMAGE_MODEL,
+            contents="Generate a tiny 64x64 solid blue square image.",
+            config=genai.types.GenerateContentConfig(
+                response_modalities=["IMAGE", "TEXT"],
+            ),
+        )
+        for part in resp.candidates[0].content.parts:
+            if part.inline_data and part.inline_data.mime_type.startswith("image/"):
+                return True
+        return False
+    except Exception as e:
+        print(f"  Image API test failed: {e}")
+        return False
+
+
+# Bike context builders
+
+def _bike_context(row: pd.Series) -> str:
+    # Compact one-liner with key fields + short campaign history
+    color = row.get("color", "")
+    color_str = f", Color: {color}" if pd.notna(color) and color else ""
+    km = row["km_ridden"]
+    km_str = f"{int(km)} km" if pd.notna(km) else "unknown km"
+    year = int(row["year"]) if pd.notna(row["year"]) else "unknown"
     desc = row.get("description", "")
-    if pd.notna(desc) and desc:
-        parts.append(f"Description: {desc}")
+    desc_str = f" | {desc[:150]}" if pd.notna(desc) and desc else ""
 
-    trial_cols = get_trial_columns(row.to_frame().T)
-    for col in trial_cols:
-        val = row.get(col, "")
-        if pd.notna(val) and str(val).strip():
-            parts.append(f"Previous {col}: {val}")
+    line = (
+        f"[{row['id']}] {row['title']} | {row['brand']} {row['category']} | "
+        f"€{row['price']:.0f} | {row['condition']} | {year} | {km_str} | "
+        f"Score {row['sell_difficulty_score']}/5 | Day {row.get('days_on_market', 0)}"
+        f"{color_str}{desc_str}"
+    )
 
-    return "\n".join(parts)
+    history = load_bike_campaign_history(int(row["id"]))
+    if history:
+        past = []
+        for h in history:
+            angle = h.get("selling_angle", "?")[:50]
+            tone = h.get("tone", "?")
+            audience = h.get("target_audience", "?")[:40]
+            past.append(f"#{h.get('trial_num','?')}: {angle} | tone={tone} | audience={audience}")
+        line += f"\n  PAST ({len(history)}x): " + " // ".join(past)
+
+    return line
+
+
+def _bike_image_context(row: pd.Series) -> str:
+    # Visual details used in image generation prompts
+    parts = [f"{row['brand']} {row['title']}"]
+    cat = row.get("category", "")
+    if pd.notna(cat) and cat:
+        parts.append(f"category: {cat}")
+        is_city = any(k in str(cat).lower() for k in ["city", "urban", "e-city"])
+        parts.append(f"setting hint: {'urban/city' if is_city else 'nature/trail'}")
+    color = row.get("color", "")
+    if pd.notna(color) and color:
+        parts.append(f"color: {color}")
+    condition = row.get("condition", "")
+    if pd.notna(condition):
+        parts.append(f"condition: {condition}")
+    frame = row.get("frame_size", "")
+    if pd.notna(frame) and frame:
+        parts.append(f"frame: {frame}")
+    parts.append(f"brand on frame: {row['brand']}")
+    return ", ".join(parts)
 
 
 def _slug(title: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")[:40]
 
 
-def _parse_json_response(raw: str, step_name: str) -> list[dict]:
-    """Strip markdown fences and parse JSON. Exit with clear message on failure."""
+def _parse_json_response(raw: str, step_name: str) -> list[dict] | None:
     text = raw.strip()
     if text.startswith("```"):
         text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-
     try:
         data = json.loads(text)
     except json.JSONDecodeError as e:
-        print(f"\n  ERROR: {step_name} returned invalid JSON.")
-        print(f"  Parse error: {e}")
-        print(f"  Raw response (first 500 chars):\n{text[:500]}")
-        sys.exit(1)
-
+        print(f"  WARN: {step_name} returned invalid JSON: {e}")
+        return None
     if not isinstance(data, list):
-        print(f"\n  ERROR: {step_name} returned JSON but not an array.")
-        sys.exit(1)
-
+        print(f"  WARN: {step_name} returned JSON but not an array.")
+        return None
     return data
 
 
 def trial_output_dir(trial_num: int) -> Path:
-    """Return output/trial_N/ path, creating it if needed."""
     d = OUTPUT_DIR / f"trial_{trial_num}"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
-# ---------------------------------------------------------------------------
-# Marketing Manager Agent
-# ---------------------------------------------------------------------------
+# Image download (with disk cache)
 
-MANAGER_SYSTEM_PROMPT = """\
-You are a marketing manager for a refurbished bike online shop called movelo.
-Your job: look at bikes that are hard to sell and write a short marketing brief \
-for each one.
-
-IMPORTANT: Some bikes may have "Previous campaign_trial_N" fields. These are \
-past marketing attempts we already tried. READ them carefully and come up with \
-a DIFFERENT strategy this time. Do not repeat what was already done.
-
-For EACH bike, return:
-- bike_id
-- target_audience (who would buy this)
-- selling_angle (the main hook / value proposition)
-- content_types (list: pick from "instagram_post", "email", "image_ad")
-- tone (e.g. "adventurous", "value-focused", "urban-chic")
-- key_message (one sentence the marketer should build around)
-
-Reply ONLY with a JSON array. No extra text.
-"""
+def _download_image(url: str) -> bytes | None:
+    if not url:
+        return None
+    IMAGE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    url_hash = hashlib.md5(url.encode()).hexdigest()
+    ext = Path(url.split("?")[0]).suffix or ".webp"
+    cache_path = IMAGE_CACHE_DIR / f"{url_hash}{ext}"
+    if cache_path.exists():
+        return cache_path.read_bytes()
+    try:
+        resp = requests.get(url, timeout=15)
+        resp.raise_for_status()
+        cache_path.write_bytes(resp.content)
+        return resp.content
+    except Exception as e:
+        print(f"  WARN: image download failed ({e})")
+        return None
 
 
-def run_manager_agent(bikes_df: pd.DataFrame) -> list[dict]:
-    """Send hard-to-sell bikes to the Marketing Manager and get strategy briefs."""
-    llm = _make_llm(temperature=0.4)
+def _mime_from_url(url: str) -> str:
+    lower = url.lower().split("?")[0]
+    if lower.endswith(".png"):
+        return "image/png"
+    if lower.endswith(".jpg") or lower.endswith(".jpeg"):
+        return "image/jpeg"
+    return "image/webp"
 
-    bike_texts = "\n---\n".join(
-        _bike_summary(row) for _, row in bikes_df.iterrows()
+
+# Sale reason — short note on why a bike sold
+
+def summarize_sale_reason(bike_row: pd.Series, last_campaign: dict,
+                          campaigns_run: int) -> str:
+    llm = _make_llm(temperature=0.3)
+    km = bike_row.get("km_ridden")
+    km_str = f"{int(km)} km" if pd.notna(km) else "unknown km"
+    year = int(bike_row["year"]) if pd.notna(bike_row.get("year")) else "unknown"
+
+    bike_line = (
+        f"{bike_row.get('title','')} | {bike_row.get('brand','')} "
+        f"{bike_row.get('category','')} | €{float(bike_row.get('price',0) or 0):.0f} | "
+        f"{bike_row.get('condition','')} | {year} | {km_str} | "
+        f"score {bike_row.get('sell_difficulty_score','?')}/5 | "
+        f"days listed {bike_row.get('days_on_market',0)} | "
+        f"campaigns run {campaigns_run}"
     )
+    if last_campaign:
+        camp_line = (
+            f"Last campaign — angle: {last_campaign.get('selling_angle','?')} | "
+            f"audience: {last_campaign.get('target_audience','?')} | "
+            f"tone: {last_campaign.get('tone','?')} | "
+            f"actions: {last_campaign.get('actions','?')}"
+        )
+    else:
+        camp_line = "Last campaign — none (sold without targeted marketing)."
 
+    payload = f"{bike_line}\n{camp_line}"
     try:
         response = llm.invoke([
-            SystemMessage(content=MANAGER_SYSTEM_PROMPT),
-            HumanMessage(content=f"Here are the bikes that need marketing help:\n\n{bike_texts}"),
+            SystemMessage(content=prompts.SALE_REASON),
+            HumanMessage(content=payload),
         ])
+        text = (response.content or "").strip().strip('"').strip()
+        return text or "(no reason produced)"
     except Exception as e:
-        print(f"\n  ERROR: Marketing Manager API call failed: {e}")
-        sys.exit(1)
-
-    return _parse_json_response(response.content, "Marketing Manager")
+        return f"(LLM error: {e})"
 
 
-# ---------------------------------------------------------------------------
-# Marketer Agent
-# ---------------------------------------------------------------------------
+# Marketing Manager agent
 
-MARKETER_SYSTEM_PROMPT = """\
-You are a creative marketer for movelo, a refurbished bike shop.
-You receive a marketing brief from your manager and you execute it.
+def run_manager_agent(bikes_df: pd.DataFrame, max_retries: int = 2) -> list[dict]:
+    llm = _make_llm(temperature=cfg.MANAGER_TEMPERATURE)
+    bike_texts = "\n".join(_bike_context(row) for _, row in bikes_df.iterrows())
+    for attempt in range(max_retries):
+        try:
+            response = llm.invoke([
+                SystemMessage(content=prompts.MANAGER),
+                HumanMessage(content=bike_texts),
+            ])
+        except Exception as e:
+            print(f"  ERROR: Manager call failed: {e}")
+            sys.exit(1)
+        result = _parse_json_response(response.content, "Manager")
+        if result is not None:
+            return result
+        print(f" retry {attempt + 1}", end="", flush=True)
+    print("\nERROR: Manager failed after retries.")
+    sys.exit(1)
 
-For EACH brief, produce:
-- bike_id
-- instagram_caption (engaging, with hashtags, max 200 words)
-- email_subject (short, punchy)
-- email_body (friendly, 3-4 sentences)
-- image_prompt_a (lifestyle photo prompt: a ~30 year old rider in an URBAN setting — \
-city street, cafe, park path. Describe the scene, lighting, mood, what the rider wears. \
-Be specific about the bike type and color.)
-- image_prompt_b (lifestyle photo prompt: same ~30 year old demographic but in a \
-NATURE / ADVENTURE setting — forest trail, countryside road, mountain overlook. \
-Different vibe from prompt A. Describe scene, lighting, mood, rider outfit.)
 
-IMPORTANT: Both image prompts must mention it is a photo advertisement for a \
-refurbished bike shop. Do NOT include any text or logos in the image description. \
-Keep prompts under 100 words each.
+# Marketer agent — processes briefs in batches of 5
 
-Reply ONLY with a JSON array. No extra text.
-"""
+MARKETER_BATCH_SIZE = 5
+MARKETER_MAX_RETRIES = 2
 
 
 def run_marketer_agent(briefs: list[dict], bikes_df: pd.DataFrame) -> list[dict]:
-    """Take manager briefs + original bike data, produce marketing content."""
-    llm = _make_llm(temperature=0.8)
+    llm = _make_llm(temperature=cfg.MARKETER_TEMPERATURE)
 
-    bike_lookup = {
-        int(row["id"]): _bike_summary(row) for _, row in bikes_df.iterrows()
+    bike_visual = {
+        int(row["id"]): _bike_image_context(row) for _, row in bikes_df.iterrows()
     }
 
-    context_parts = []
-    for brief in briefs:
-        bid = brief.get("bike_id")
-        bike_info = bike_lookup.get(bid, "No extra info available.")
-        context_parts.append(
-            f"== Brief ==\n{json.dumps(brief, indent=2)}\n\n== Bike Data ==\n{bike_info}"
-        )
+    all_results: list[dict] = []
+    for i in range(0, len(briefs), MARKETER_BATCH_SIZE):
+        batch = briefs[i : i + MARKETER_BATCH_SIZE]
+        batch_ids = [b.get("bike_id") for b in batch]
 
-    payload = "\n\n---\n\n".join(context_parts)
+        context_parts = []
+        for brief in batch:
+            bid = brief.get("bike_id")
+            visual = bike_visual.get(bid, "no details")
+            context_parts.append(
+                f"Brief: {json.dumps(brief)}\nBike visual: {visual}"
+            )
+        payload = "\n---\n".join(context_parts)
 
-    try:
-        response = llm.invoke([
-            SystemMessage(content=MARKETER_SYSTEM_PROMPT),
-            HumanMessage(content=f"Execute these briefs:\n\n{payload}"),
-        ])
-    except Exception as e:
-        print(f"\n  ERROR: Marketer API call failed: {e}")
-        sys.exit(1)
+        result = None
+        for attempt in range(MARKETER_MAX_RETRIES):
+            try:
+                response = llm.invoke([
+                    SystemMessage(content=prompts.MARKETER),
+                    HumanMessage(content=payload),
+                ])
+            except Exception as e:
+                print(f"  ERROR: Marketer call failed: {e}")
+                sys.exit(1)
+            result = _parse_json_response(response.content, "Marketer")
+            if result is not None:
+                break
+            print(f" retry {attempt + 1}", end="", flush=True)
 
-    return _parse_json_response(response.content, "Marketer")
+        if result is None:
+            print(f"\nERROR: Marketer batch failed for bikes {batch_ids}")
+            sys.exit(1)
+        all_results.extend(result)
+
+    return all_results
 
 
-# ---------------------------------------------------------------------------
-# Image Generation (Gemini Flash native image generation)
-# ---------------------------------------------------------------------------
+# Image generation
 
 def generate_images(content_list: list[dict], bikes_df: pd.DataFrame,
                     trial_num: int) -> dict:
-    """Generate 2 images per bike and save to output/trial_N/<bike_folder>/."""
     try:
         client = genai.Client()
     except Exception as e:
-        print(f"\n  ERROR: Could not create Gemini client: {e}")
+        print(f"  ERROR: Could not create Gemini client: {e}")
         sys.exit(1)
 
-    title_lookup = {
-        int(row["id"]): row["title"] for _, row in bikes_df.iterrows()
-    }
+    title_lookup = {int(row["id"]): row["title"] for _, row in bikes_df.iterrows()}
+    image_url_lookup = {int(row["id"]): row.get("image_url", "") for _, row in bikes_df.iterrows()}
+    visual_lookup = {int(row["id"]): _bike_image_context(row) for _, row in bikes_df.iterrows()}
 
     base_dir = trial_output_dir(trial_num)
     results = {}
@@ -202,26 +295,49 @@ def generate_images(content_list: list[dict], bikes_df: pd.DataFrame,
     for item in content_list:
         bid = item.get("bike_id")
         title = title_lookup.get(bid, f"bike_{bid}")
-        folder_name = f"bike_{bid}_{_slug(title)}"
-        folder = base_dir / folder_name
+        folder = base_dir / f"bike_{bid}_{_slug(title)}"
         folder.mkdir(parents=True, exist_ok=True)
 
         brief_path = folder / "content.json"
         brief_path.write_text(json.dumps(item, indent=2))
 
+        bike_image_url = image_url_lookup.get(bid, "")
+        bike_image_bytes = _download_image(bike_image_url)
+        has_ref = bike_image_bytes is not None
+        visual = visual_lookup.get(bid, "")
+
         paths = []
         for label, key in [("urban", "image_prompt_a"), ("nature", "image_prompt_b")]:
             prompt = item.get(key, "")
             if not prompt:
-                print(f"  WARNING: No {key} for bike {bid}, skipping {label} image.")
                 continue
 
             fpath = folder / f"{label}.png"
-            print(f"  Generating {label} image for bike {bid} ...", end=" ", flush=True)
+            print(f"\n    {bid}/{label} ", end="", flush=True)
             try:
+                contents = []
+                brand = visual.split(",")[0].split()[0]
+                brand_inst = prompts.BRAND_INSTRUCTION.format(brand=brand)
+                if has_ref:
+                    contents.append(genai_types.Part.from_bytes(
+                        data=bike_image_bytes,
+                        mime_type=_mime_from_url(bike_image_url),
+                    ))
+                    contents.append(genai_types.Part.from_text(
+                        text=prompts.IMAGE_WITH_REF.format(
+                            visual=visual, brand_inst=brand_inst, prompt=prompt,
+                        )
+                    ))
+                else:
+                    contents.append(genai_types.Part.from_text(
+                        text=prompts.IMAGE_NO_REF.format(
+                            visual=visual, brand_inst=brand_inst, prompt=prompt,
+                        )
+                    ))
+
                 response = client.models.generate_content(
-                    model="gemini-2.5-flash-image",
-                    contents=f"Generate a single high-quality photo. {prompt}",
+                    model=cfg.IMAGE_MODEL,
+                    contents=contents,
                     config=genai.types.GenerateContentConfig(
                         response_modalities=["IMAGE", "TEXT"],
                     ),
@@ -233,14 +349,14 @@ def generate_images(content_list: list[dict], bikes_df: pd.DataFrame,
                         break
 
                 if not image_bytes:
-                    print("FAILED (no image in response)")
+                    print("skip", end="", flush=True)
                     continue
 
                 fpath.write_bytes(image_bytes)
                 paths.append(str(fpath))
-                print("OK")
+                print("ok", end="", flush=True)
             except Exception as e:
-                print(f"FAILED ({e})")
+                print(f"fail", end="", flush=True)
 
         results[bid] = {"folder": str(folder), "images": paths}
 

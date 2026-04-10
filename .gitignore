@@ -1,11 +1,5 @@
-# Environment variables
+# Environment
 .env
-
-# API keys
-*.api
-
-# Output files
-output/
 
 # Python
 __pycache__/
@@ -20,3 +14,14 @@ env/
 
 # macOS
 .DS_Store
+
+# Output (generated images, etc.)
+output/
+
+# Working data files (generated from seed on first run)
+inventory.csv
+campaigns.csv
+knowledge_base.csv
+
+# Legacy name (in case leftover)
+trials_log.csv
