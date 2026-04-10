@@ -1,8 +1,7 @@
-# Movelo — Refurbished Bike Marketing Pipeline
-#
-# python main.py              Run one campaign (advances 1 day)
-# python main.py --test-api   Test API connections only
-# python main.py --dashboard  Launch the Streamlit dashboard
+# movelo — refurbished bike marketing pipeline
+# python main.py              run one campaign (advances 1 day)
+# python main.py --test-api   test api connections only
+# python main.py --dashboard  launch the streamlit dashboard
 
 import argparse
 import os
@@ -33,6 +32,8 @@ from agents import (
 )
 
 
+# preflight — checks api key is set before anything runs
+
 def preflight() -> None:
     if not cfg.GOOGLE_API_KEY or cfg.GOOGLE_API_KEY == "your-gemini-api-key-here":
         print("ERROR: GOOGLE_API_KEY not set. Edit .env and re-run.")
@@ -50,7 +51,7 @@ def run_api_tests() -> bool:
     return llm_ok and img_ok
 
 
-# Pipeline steps
+# pipeline steps — each takes ctx dict and returns it with new data
 
 def step_advance_day(ctx: dict) -> dict:
     advance_day()
@@ -123,6 +124,7 @@ def step_images(ctx: dict) -> dict:
 
 
 def step_log(ctx: dict) -> dict:
+    # write all campaign data to campaigns.csv
     today = date.today().isoformat()
     trial_num = ctx["trial_num"]
     briefs = ctx.get("briefs", [])
@@ -178,6 +180,7 @@ def step_log(ctx: dict) -> dict:
 
 
 def step_auto_sell(ctx: dict) -> dict:
+    # simulate random sales based on score and auto_sell_probability
     hard = ctx["hard"]
     bike_ids = [int(r["id"]) for _, r in hard.iterrows()]
     scores = {int(r["id"]): int(r["sell_difficulty_score"]) for _, r in hard.iterrows()}
@@ -195,7 +198,7 @@ def step_auto_sell(ctx: dict) -> dict:
     return ctx
 
 
-# Pipeline assembly
+# pipeline assembly — registers all steps in order
 
 def build_pipeline() -> Pipeline:
     pipe = Pipeline()
@@ -221,6 +224,8 @@ def run_once() -> None:
 def run_dashboard() -> None:
     os.execvp("streamlit", ["streamlit", "run", "dashboard.py"])
 
+
+# cli entry point
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Movelo marketing pipeline")
