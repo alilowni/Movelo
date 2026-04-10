@@ -62,10 +62,10 @@ def step_score(ctx: dict) -> dict:
     trial_num = next_campaign_number()
     avail = df[df["status"] != "sold"]
     n_sold = len(df) - len(avail)
-    danger = len(avail[avail["sell_difficulty_score"] >= cfg.HARD_SELL_THRESHOLD])
+    risky = len(avail[avail["sell_difficulty_score"] >= cfg.HARD_SELL_THRESHOLD])
     max_day = int(avail["days_on_market"].max()) if not avail.empty else 0
     print(f"#{trial_num} | {len(avail)} avail, {n_sold} sold, "
-          f"{danger} in danger | day {max_day}", end="", flush=True)
+          f"{risky} risky | day {max_day}", end="", flush=True)
     ctx["df"] = df
     ctx["trial_num"] = trial_num
     return ctx
@@ -74,13 +74,13 @@ def step_score(ctx: dict) -> dict:
 def step_filter(ctx: dict) -> dict:
     hard = filter_hard_to_sell(ctx["df"])
     cap = cfg.MAX_BIKES_PER_CAMPAIGN
-    total_danger = len(hard)
+    total_risky = len(hard)
     if len(hard) > cap:
         hard = hard.sort_values("sell_difficulty_score", ascending=False).head(cap)
     ids = [int(r["id"]) for _, r in hard.iterrows()]
     msg = f"{len(hard)} bikes"
-    if total_danger > cap:
-        msg += f" (of {total_danger} in danger)"
+    if total_risky > cap:
+        msg += f" (of {total_risky} risky)"
     print(f"{msg}: {ids}", end="", flush=True)
     ctx["hard"] = hard
     return ctx

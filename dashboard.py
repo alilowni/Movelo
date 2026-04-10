@@ -10,6 +10,8 @@ import pandas as pd
 import streamlit as st
 from pathlib import Path
 
+import config as cfg
+import scoring
 from scoring import (
     init_working_files,
     load_and_score,
@@ -43,7 +45,7 @@ def get_knowledge_base() -> pd.DataFrame:
     return load_knowledge_base()
 
 
-def danger_color(score: int) -> str:
+def risk_color(score: int) -> str:
     if score >= 4:
         return "🔴"
     if score == 3:
@@ -237,20 +239,24 @@ if page == "🗄️ Bike Inventory":
 
     n_sold = len(bikes[bikes["status"] == "sold"])
     n_avail = len(bikes) - n_sold
+    n_risky = len(bikes[(bikes["sell_difficulty_score"] >= cfg.HARD_SELL_THRESHOLD) & (bikes["status"] != "sold")])
+
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Available", n_avail)
     col2.metric("Sold", n_sold)
-    col3.metric("In danger (4-5)", len(bikes[(bikes["sell_difficulty_score"] >= 4) & (bikes["status"] != "sold")]))
+    col3.metric("Risky", n_risky)
     col4.metric("Avg price", f"€{bikes['price'].mean():.0f}")
 
-    fcol1, fcol2, fcol3, fcol4 = st.columns(4)
+    # View toggle + filters
+    tcol, fcol1, fcol2, fcol3 = st.columns([1.2, 1, 1, 1])
+    with tcol:
+        risky_only = st.toggle("🔴 Risky bikes", value=False,
+                                help=f"Show only bikes with score ≥ {cfg.HARD_SELL_THRESHOLD} (targeted by campaigns)")
     with fcol1:
         brands = st.multiselect("Brand", sorted(bikes["brand"].unique()))
     with fcol2:
         categories = st.multiselect("Category", sorted(bikes["category"].unique()))
     with fcol3:
-        min_score, max_score = st.slider("Difficulty score", 0, 5, (0, 5))
-    with fcol4:
         show_sold = st.checkbox("Show sold bikes", value=False)
 
     filtered = bikes.copy()
@@ -258,23 +264,24 @@ if page == "🗄️ Bike Inventory":
         filtered = filtered[filtered["brand"].isin(brands)]
     if categories:
         filtered = filtered[filtered["category"].isin(categories)]
-    filtered = filtered[
-        (filtered["sell_difficulty_score"] >= min_score)
-        & (filtered["sell_difficulty_score"] <= max_score)
-    ]
+    if risky_only:
+        filtered = filtered[filtered["sell_difficulty_score"] >= cfg.HARD_SELL_THRESHOLD]
     if not show_sold:
         filtered = filtered[filtered["status"] != "sold"]
+
+    if risky_only and not filtered.empty:
+        st.caption(f"Showing {len(filtered)} risky bikes (score ≥ {cfg.HARD_SELL_THRESHOLD}) — these get targeted by campaigns.")
 
     display = filtered[
         ["id", "title", "brand", "category", "price", "condition",
          "sell_difficulty_score", "days_on_market", "status"]
     ].copy()
-    display["danger"] = display["sell_difficulty_score"].apply(danger_color)
+    display["risk"] = display["sell_difficulty_score"].apply(risk_color)
     display["status_badge"] = display["status"].apply(status_badge)
     display = display.sort_values("sell_difficulty_score", ascending=False)
 
     st.dataframe(
-        display[["danger", "id", "title", "brand", "category", "price",
+        display[["risk", "id", "title", "brand", "category", "price",
                  "condition", "sell_difficulty_score", "days_on_market", "status_badge"]],
         width="stretch",
         hide_index=True,
@@ -285,11 +292,29 @@ if page == "🗄️ Bike Inventory":
             ),
             "days_on_market": "Days listed",
             "status_badge": "Status",
-            "danger": " ",
+            "risk": " ",
         },
     )
 
-    st.markdown("### Bike Details & Actions")
+    # Score explanation
+    with st.expander("How is the score calculated?"):
+        st.markdown(
+            f"Each bike gets a **sell difficulty score** from 0 (easy) to 5 (hard). "
+            f"Bikes scoring **≥ {cfg.HARD_SELL_THRESHOLD}** are flagged as \"risky\" "
+            f"and get targeted by marketing campaigns.\n\n"
+            f"**Formula:** `score = round(base + day_penalty)`, clamped 0–5\n\n"
+            f"| Factor | Weight | 0 (easy) | 5 (hard) |\n"
+            f"|---|---|---|---|\n"
+            f"| Price | 30% | Cheapest in inventory | Most expensive |\n"
+            f"| Mileage | 30% | 0 km | Highest km |\n"
+            f"| Condition | 20% | Excellent | Good |\n"
+            f"| Age | 20% | 2024 | 2021 or older |\n"
+            f"| Day penalty | +{scoring.DAY_PENALTY_PER_DAY}/day | Day 0 | Accumulates |\n\n"
+            f"All factors are relative to the current inventory. "
+            f"A *popularity* weight will be added later based on human input from the sales team."
+        )
+
+    st.markdown("### Bike Details")
     bike_ids = filtered["id"].tolist()
     if bike_ids:
         selected_id = st.selectbox(
@@ -311,7 +336,7 @@ if page == "🗄️ Bike Inventory":
             st.markdown(f"Price: **€{bike_row['price']:.0f}** | Condition: {bike_row['condition']}")
             km = bike_row['km_ridden']
             st.markdown(f"KM: {km if pd.notna(km) else 'N/A'} | Year: {int(bike_row['year']) if pd.notna(bike_row['year']) else 'N/A'}")
-            st.markdown(f"Score: {danger_color(bike_row['sell_difficulty_score'])} **{bike_row['sell_difficulty_score']}**/5 | Days listed: {bike_row['days_on_market']}")
+            st.markdown(f"Score: {risk_color(bike_row['sell_difficulty_score'])} **{bike_row['sell_difficulty_score']}**/5 | Days listed: {bike_row['days_on_market']}")
 
             desc = bike_row.get("description", "")
             if pd.notna(desc) and desc:
@@ -411,20 +436,20 @@ elif page == "📊 Analytics":
     targeted = trials["bike_id"].nunique() if not trials.empty else 0
     col4.metric("Bikes marketed", targeted)
 
-    st.markdown("### Bikes in danger (available, score >= 4)")
-    danger = bikes_df[(bikes_df["sell_difficulty_score"] >= 4) & (bikes_df["status"] != "sold")].copy()
+    st.markdown("### Risky bikes (available, score >= 4)")
+    risky = bikes_df[(bikes_df["sell_difficulty_score"] >= 4) & (bikes_df["status"] != "sold")].copy()
 
     if not trials.empty:
         trial_counts = trials.groupby("bike_id").size().reset_index(name="times_marketed")
-        danger = danger.merge(trial_counts, left_on="id", right_on="bike_id", how="left")
-        danger["times_marketed"] = danger["times_marketed"].fillna(0).astype(int)
+        risky = risky.merge(trial_counts, left_on="id", right_on="bike_id", how="left")
+        risky["times_marketed"] = risky["times_marketed"].fillna(0).astype(int)
     else:
-        danger["times_marketed"] = 0
+        risky["times_marketed"] = 0
 
-    danger = danger.sort_values("sell_difficulty_score", ascending=False)
+    risky = risky.sort_values("sell_difficulty_score", ascending=False)
     st.dataframe(
-        danger[["id", "title", "brand", "price", "condition",
-                "sell_difficulty_score", "days_on_market", "times_marketed"]],
+        risky[["id", "title", "brand", "price", "condition",
+               "sell_difficulty_score", "days_on_market", "times_marketed"]],
         width="stretch",
         hide_index=True,
         column_config={
@@ -436,9 +461,9 @@ elif page == "📊 Analytics":
         },
     )
 
-    never_marketed = danger[danger["times_marketed"] == 0]
+    never_marketed = risky[risky["times_marketed"] == 0]
     if not never_marketed.empty:
-        st.warning(f"{len(never_marketed)} high-danger bikes have NEVER been marketed:")
+        st.warning(f"{len(never_marketed)} high-risk bikes have NEVER been marketed:")
         for _, r in never_marketed.iterrows():
             st.markdown(f"- **[{r['id']}] {r['title']}** — €{r['price']:.0f}, score {r['sell_difficulty_score']}, {r['days_on_market']} days")
 

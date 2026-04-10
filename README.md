@@ -104,7 +104,7 @@ Five pages:
 - **Bike Inventory** — all bikes with scores, filters by brand/category/score, detail view with product photo
 - **Campaigns** — browse by campaign number or follow a single bike's full marketing journey
 - **Run Campaign** — one button that runs the full pipeline and streams live logs
-- **Analytics** — trend charts (bikes targeted, cumulative sales), danger list, brand frequency
+- **Analytics** — trend charts (bikes targeted, cumulative sales), risky bikes list, brand frequency
 - **Knowledge Base** — sale insights with filters, showing what worked and why
 
 ## Configuration
