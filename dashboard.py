@@ -560,25 +560,28 @@ elif page == "🧠 Knowledge Base":
             r = row.to_dict()
             header = (
                 f"Bike {int(r['bike_id'])} — {r['title']} "
-                f"(€{float(r['price']):.0f}) · sold in campaign "
+                f"(€{float(r['price']):.0f}) · campaign "
                 f"{int(r['trial_num'])}"
             )
             with st.expander(header, expanded=True):
-                st.markdown(f"**Why it sold:** {r.get('reason_note', '—')}")
-                c1, c2, c3 = st.columns(3)
+                reason = r.get("reason_note") or "—"
+                st.markdown(f"**Why it sold:** {reason}")
+                c1, c2, c3, c4 = st.columns(4)
                 with c1:
-                    st.markdown(f"**Brand:** {r.get('brand', '—')}")
-                    st.markdown(f"**Category:** {r.get('category', '—')}")
+                    st.caption("Bike")
+                    st.markdown(f"{r.get('brand', '—')} · {r.get('category', '—')}")
                 with c2:
-                    st.markdown(f"**Score:** {int(r.get('sell_difficulty_score', 0))}/5")
-                    st.markdown(f"**Days listed:** {int(r.get('days_on_market', 0))}")
+                    st.caption("Performance")
+                    st.markdown(f"Score {int(r.get('sell_difficulty_score', 0))}/5 · {int(r.get('days_on_market', 0))}d · {int(r.get('campaigns_run', 0))} runs")
                 with c3:
-                    st.markdown(f"**Campaigns run:** {int(r.get('campaigns_run', 0))}")
-                    st.markdown(f"**Tone used:** {r.get('tone') or '—'}")
-                if r.get("selling_angle"):
-                    st.markdown(f"**Winning angle:** {r['selling_angle']}")
-                if r.get("target_audience"):
-                    st.markdown(f"**Audience:** {r['target_audience']}")
+                    st.caption("Strategy")
+                    angle = r.get("selling_angle") or "—"
+                    st.markdown(f"{angle[:80]}")
+                with c4:
+                    st.caption("Tone & Audience")
+                    tone = r.get("tone") or "—"
+                    audience = r.get("target_audience") or "—"
+                    st.markdown(f"{tone} · {audience[:40]}")
 
         st.markdown("### Full table")
         kb_cols = [c for c in [

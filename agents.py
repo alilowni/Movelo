@@ -15,7 +15,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 
 import config as cfg
 import prompts
-from scoring import load_bike_campaign_history
+from scoring import load_bike_campaign_history, retrieve_kb_insights
 
 OUTPUT_DIR = Path(cfg.OUTPUT_DIR)
 IMAGE_CACHE_DIR = OUTPUT_DIR / ".image_cache"
@@ -84,6 +84,16 @@ def _bike_context(row: pd.Series) -> str:
             audience = h.get("target_audience", "?")[:40]
             past.append(f"#{h.get('trial_num','?')}: {angle} | tone={tone} | audience={audience}")
         line += f"\n  PAST ({len(history)}x): " + " // ".join(past)
+
+    # Knowledge base: what worked for similar bikes (same brand or category)
+    brand = str(row.get("brand", ""))
+    category = str(row.get("category", ""))
+    try:
+        insights = retrieve_kb_insights(brand, category)
+        if insights:
+            line += "\n  WHAT WORKED: " + " // ".join(insights[:3])
+    except Exception:
+        pass
 
     return line
 

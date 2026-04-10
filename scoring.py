@@ -245,7 +245,22 @@ def _record_sale_insights(sold_ids: list[int], trial_num: int,
             try:
                 note = summarize_sale_reason(b, last, n_campaigns)
             except Exception as e:
-                note = f"(auto-note unavailable: {e})"
+                note = ""
+
+            # Fallback: if LLM returned nothing useful, build a note from the data
+            if not note or note.startswith("("):
+                angle = last.get("selling_angle", "")
+                audience = last.get("target_audience", "")
+                tone = last.get("tone", "")
+                parts = []
+                if angle:
+                    parts.append(f"angle: {angle[:60]}")
+                if audience:
+                    parts.append(f"audience: {audience[:40]}")
+                if tone:
+                    parts.append(f"tone: {tone}")
+                parts.append(f"after {n_campaigns} campaign(s)")
+                note = "Sold with " + ", ".join(parts) + "."
 
             rows.append({
                 "bike_id": int(bid),
@@ -289,6 +304,31 @@ def load_knowledge_base(path: str = None) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(columns=KB_COLUMNS)
     return df
+
+
+def retrieve_kb_insights(brand: str, category: str, path: str = None) -> list[str]:
+    # Simple retrieval: find KB entries matching the same brand or category.
+    # Returns compact one-liner strings the Manager can use as context.
+    kb = load_knowledge_base(path)
+    if kb.empty:
+        return []
+    brand_match = kb[kb["brand"].str.lower() == brand.lower()] if brand else pd.DataFrame()
+    cat_match = kb[kb["category"].str.lower() == category.lower()] if category else pd.DataFrame()
+    matches = pd.concat([brand_match, cat_match]).drop_duplicates(subset=["bike_id", "trial_num"])
+    if matches.empty:
+        return []
+    lines = []
+    for _, r in matches.iterrows():
+        d = r.to_dict()
+        note = d.get("reason_note", "")
+        tone = d.get("tone", "")
+        audience = d.get("target_audience", "")
+        angle = d.get("selling_angle", "")[:60]
+        lines.append(
+            f"[{d.get('brand','')} {d.get('category','')} €{d.get('price',0):.0f}] "
+            f"sold: {note[:80]} (tone={tone}, audience={audience[:30]}, angle={angle})"
+        )
+    return lines[:5]
 
 
 def append_knowledge_base(records: list[dict], path: str = None) -> None:

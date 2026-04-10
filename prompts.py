@@ -16,6 +16,8 @@ Find the angle that makes the weakness irrelevant or turns it into a strength.
 Try a genuinely different audience or angle.
 - After 3+ failed campaigns, go unconventional. Different use case, different buyer, \
 different framing entirely.
+- If WHAT WORKED insights are listed, these are real sales from similar bikes. \
+Use the winning tone, audience, and angle as inspiration — adapt, don't copy.
 
 For EACH bike return JSON:
 - bike_id (int)
