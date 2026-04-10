@@ -551,36 +551,34 @@ elif page == "Knowledge Base":
             view = view[view["tone"].isin(tone_filter)]
 
         for _, row in view.iterrows():
+            r = row.to_dict()
             header = (
-                f"Bike {int(row['bike_id'])} — {row['title']} "
-                f"(€{float(row['price']):.0f}) · sold in campaign "
-                f"{int(row['trial_num'])}"
+                f"Bike {int(r['bike_id'])} — {r['title']} "
+                f"(€{float(r['price']):.0f}) · sold in campaign "
+                f"{int(r['trial_num'])}"
             )
             with st.expander(header, expanded=True):
-                st.markdown(f"**Why it sold:** {row['reason_note']}")
+                st.markdown(f"**Why it sold:** {r.get('reason_note', '—')}")
                 c1, c2, c3 = st.columns(3)
                 with c1:
-                    st.markdown(f"**Brand:** {row['brand']}")
-                    st.markdown(f"**Category:** {row['category']}")
+                    st.markdown(f"**Brand:** {r.get('brand', '—')}")
+                    st.markdown(f"**Category:** {r.get('category', '—')}")
                 with c2:
-                    st.markdown(f"**Score:** {int(row['sell_difficulty_score'])}/5")
-                    st.markdown(f"**Days listed:** {int(row['days_on_market'])}")
+                    st.markdown(f"**Score:** {int(r.get('sell_difficulty_score', 0))}/5")
+                    st.markdown(f"**Days listed:** {int(r.get('days_on_market', 0))}")
                 with c3:
-                    st.markdown(f"**Campaigns run:** {int(row['campaigns_run'])}")
-                    st.markdown(f"**Tone used:** {row['tone'] or '—'}")
-                if row.get("selling_angle"):
-                    st.markdown(f"**Winning angle:** {row['selling_angle']}")
-                if row.get("target_audience"):
-                    st.markdown(f"**Audience:** {row['target_audience']}")
+                    st.markdown(f"**Campaigns run:** {int(r.get('campaigns_run', 0))}")
+                    st.markdown(f"**Tone used:** {r.get('tone') or '—'}")
+                if r.get("selling_angle"):
+                    st.markdown(f"**Winning angle:** {r['selling_angle']}")
+                if r.get("target_audience"):
+                    st.markdown(f"**Audience:** {r['target_audience']}")
 
         st.markdown("### Full table")
-        st.dataframe(
-            view[[
-                "bike_id", "trial_num", "date", "title", "brand", "category",
-                "price", "sell_difficulty_score", "days_on_market",
-                "campaigns_run", "tone", "selling_angle", "target_audience",
-                "reason_note",
-            ]],
-            width="stretch",
-            hide_index=True,
-        )
+        kb_cols = [c for c in [
+            "bike_id", "trial_num", "date", "title", "brand", "category",
+            "price", "sell_difficulty_score", "days_on_market",
+            "campaigns_run", "tone", "selling_angle", "target_audience",
+            "reason_note",
+        ] if c in view.columns]
+        st.dataframe(view[kb_cols], width="stretch", hide_index=True)
