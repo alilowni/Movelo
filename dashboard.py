@@ -229,7 +229,11 @@ def _render_campaign_card(row: pd.Series, bikes_df: pd.DataFrame,
             banner_cols = st.columns(3)
             for i, img in enumerate(eval_images[:3]):
                 with banner_cols[i]:
-                    st.image(img["path"], caption=f"Banner {i + 1}", width="stretch")
+                    try:
+                        with open(img["path"], "rb") as f:
+                            st.image(f.read(), caption=f"Banner {i + 1}", width="stretch")
+                    except FileNotFoundError:
+                        st.caption(f"Banner {i + 1} — image not found")
                     if img.get("html_url"):
                         st.markdown(
                             f'<a href="{img["html_url"]}" target="_blank" '
