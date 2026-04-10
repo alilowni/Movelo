@@ -266,7 +266,9 @@ if page == "🗄️ Bike Inventory":
         filtered = filtered[filtered["category"].isin(categories)]
     if risky_only:
         filtered = filtered[filtered["sell_difficulty_score"] >= cfg.HARD_SELL_THRESHOLD]
-    if not show_sold:
+    if show_sold:
+        filtered = filtered[filtered["status"] == "sold"]
+    else:
         filtered = filtered[filtered["status"] != "sold"]
 
     if risky_only and not filtered.empty:
