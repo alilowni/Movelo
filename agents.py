@@ -1,9 +1,9 @@
 # AI agents — manager, marketer, image gen, sale reason analysis.
+# All LLM calls are wrapped in try/except so the pipeline never crashes.
 
 import hashlib
 import json
 import re
-import sys
 from pathlib import Path
 
 import pandas as pd
@@ -168,7 +168,11 @@ def _mime_from_url(url: str) -> str:
 
 def summarize_sale_reason(bike_row: pd.Series, last_campaign: dict,
                           campaigns_run: int) -> str:
-    llm = _make_llm(temperature=0.3)
+    try:
+        llm = _make_llm(temperature=0.3)
+    except Exception as e:
+        return f"(LLM init error: {e})"
+
     km = bike_row.get("km_ridden")
     km_str = f"{int(km)} km" if pd.notna(km) else "unknown km"
     year = int(bike_row["year"]) if pd.notna(bike_row.get("year")) else "unknown"
@@ -203,36 +207,57 @@ def summarize_sale_reason(bike_row: pd.Series, last_campaign: dict,
         return f"(LLM error: {e})"
 
 
-# Marketing Manager agent
+# Marketing Manager agent — returns [] on failure
 
-def run_manager_agent(bikes_df: pd.DataFrame, max_retries: int = 2) -> list[dict]:
-    llm = _make_llm(temperature=cfg.MANAGER_TEMPERATURE)
+MAX_RETRIES = 3
+
+
+def run_manager_agent(bikes_df: pd.DataFrame) -> list[dict]:
+    try:
+        llm = _make_llm(temperature=cfg.MANAGER_TEMPERATURE)
+    except Exception as e:
+        print(f"  ERROR: Manager LLM init failed: {e}")
+        return []
+
     bike_texts = "\n".join(_bike_context(row) for _, row in bikes_df.iterrows())
-    for attempt in range(max_retries):
+
+    for attempt in range(MAX_RETRIES):
         try:
             response = llm.invoke([
                 SystemMessage(content=prompts.MANAGER),
                 HumanMessage(content=bike_texts),
             ])
         except Exception as e:
-            print(f"  ERROR: Manager call failed: {e}")
-            sys.exit(1)
+            print(f"  WARN: Manager call failed (attempt {attempt + 1}): {e}")
+            if attempt < MAX_RETRIES - 1:
+                continue
+            print("  ERROR: Manager gave up after retries")
+            return []
+
         result = _parse_json_response(response.content, "Manager")
         if result is not None:
             return result
-        print(f" retry {attempt + 1}", end="", flush=True)
-    print("\nERROR: Manager failed after retries.")
-    sys.exit(1)
+        if attempt < MAX_RETRIES - 1:
+            print(f" retry {attempt + 1}", end="", flush=True)
+
+    print("  ERROR: Manager returned no valid JSON after retries")
+    return []
 
 
-# Marketer agent — processes briefs in batches of 5
+# Marketer agent — processes briefs in batches, skips failed batches
 
 MARKETER_BATCH_SIZE = 5
-MARKETER_MAX_RETRIES = 2
 
 
 def run_marketer_agent(briefs: list[dict], bikes_df: pd.DataFrame) -> list[dict]:
-    llm = _make_llm(temperature=cfg.MARKETER_TEMPERATURE)
+    if not briefs:
+        return []
+
+    try:
+        llm = _make_llm(temperature=cfg.MARKETER_TEMPERATURE)
+    except Exception as e:
+        print(f"  ERROR: Marketer LLM init failed: {e}")
+        return []
 
     bike_visual = {
         int(row["id"]): _bike_image_context(row) for _, row in bikes_df.iterrows()
@@ -253,37 +278,44 @@ def run_marketer_agent(briefs: list[dict], bikes_df: pd.DataFrame) -> list[dict]
         payload = "\n---\n".join(context_parts)
 
         result = None
-        for attempt in range(MARKETER_MAX_RETRIES):
+        for attempt in range(MAX_RETRIES):
             try:
                 response = llm.invoke([
                     SystemMessage(content=prompts.MARKETER),
                     HumanMessage(content=payload),
                 ])
             except Exception as e:
-                print(f"  ERROR: Marketer call failed: {e}")
-                sys.exit(1)
+                print(f"  WARN: Marketer call failed (attempt {attempt + 1}): {e}")
+                if attempt < MAX_RETRIES - 1:
+                    continue
+                break
+
             result = _parse_json_response(response.content, "Marketer")
             if result is not None:
                 break
-            print(f" retry {attempt + 1}", end="", flush=True)
+            if attempt < MAX_RETRIES - 1:
+                print(f" retry {attempt + 1}", end="", flush=True)
 
         if result is None:
-            print(f"\nERROR: Marketer batch failed for bikes {batch_ids}")
-            sys.exit(1)
+            print(f"  WARN: Marketer batch skipped for bikes {batch_ids}")
+            continue
         all_results.extend(result)
 
     return all_results
 
 
-# Image generation
+# Image generation — skips failures, never crashes
 
 def generate_images(content_list: list[dict], bikes_df: pd.DataFrame,
                     trial_num: int) -> dict:
+    if not content_list:
+        return {}
+
     try:
         client = genai.Client()
     except Exception as e:
         print(f"  ERROR: Could not create Gemini client: {e}")
-        sys.exit(1)
+        return {}
 
     title_lookup = {int(row["id"]): row["title"] for _, row in bikes_df.iterrows()}
     image_url_lookup = {int(row["id"]): row.get("image_url", "") for _, row in bikes_df.iterrows()}
@@ -298,8 +330,11 @@ def generate_images(content_list: list[dict], bikes_df: pd.DataFrame,
         folder = base_dir / f"bike_{bid}_{_slug(title)}"
         folder.mkdir(parents=True, exist_ok=True)
 
-        brief_path = folder / "content.json"
-        brief_path.write_text(json.dumps(item, indent=2))
+        try:
+            brief_path = folder / "content.json"
+            brief_path.write_text(json.dumps(item, indent=2))
+        except Exception:
+            pass
 
         bike_image_url = image_url_lookup.get(bid, "")
         bike_image_bytes = _download_image(bike_image_url)
@@ -356,7 +391,7 @@ def generate_images(content_list: list[dict], bikes_df: pd.DataFrame,
                 paths.append(str(fpath))
                 print("ok", end="", flush=True)
             except Exception as e:
-                print(f"fail", end="", flush=True)
+                print("fail", end="", flush=True)
 
         results[bid] = {"folder": str(folder), "images": paths}
 

@@ -88,19 +88,33 @@ def step_filter(ctx: dict) -> dict:
 
 def step_manager(ctx: dict) -> dict:
     briefs = run_manager_agent(ctx["hard"])
-    print(f"{len(briefs)} briefs", end="", flush=True)
+    if not briefs:
+        print("no briefs (manager failed)", end="", flush=True)
+    else:
+        print(f"{len(briefs)} briefs", end="", flush=True)
     ctx["briefs"] = briefs
     return ctx
 
 
 def step_marketer(ctx: dict) -> dict:
+    if not ctx.get("briefs"):
+        print("skipped (no briefs)", end="", flush=True)
+        ctx["content"] = []
+        return ctx
     content = run_marketer_agent(ctx["briefs"], ctx["hard"])
-    print(f"{len(content)} content pieces", end="", flush=True)
+    if not content:
+        print("no content (marketer failed)", end="", flush=True)
+    else:
+        print(f"{len(content)} content pieces", end="", flush=True)
     ctx["content"] = content
     return ctx
 
 
 def step_images(ctx: dict) -> dict:
+    if not ctx.get("content"):
+        print("skipped (no content)", end="", flush=True)
+        ctx["img_results"] = {}
+        return ctx
     img_results = generate_images(ctx["content"], ctx["hard"], ctx["trial_num"])
     total_imgs = sum(len(info["images"]) for info in img_results.values())
     print(f"{total_imgs} images for {len(img_results)} bikes", end="", flush=True)
@@ -111,9 +125,9 @@ def step_images(ctx: dict) -> dict:
 def step_log(ctx: dict) -> dict:
     today = date.today().isoformat()
     trial_num = ctx["trial_num"]
-    briefs = ctx["briefs"]
-    content = ctx["content"]
-    img_results = ctx["img_results"]
+    briefs = ctx.get("briefs", [])
+    content = ctx.get("content", [])
+    img_results = ctx.get("img_results", {})
     hard = ctx["hard"]
 
     brief_lookup = {b.get("bike_id"): b for b in briefs}
@@ -167,7 +181,12 @@ def step_auto_sell(ctx: dict) -> dict:
     hard = ctx["hard"]
     bike_ids = [int(r["id"]) for _, r in hard.iterrows()]
     scores = {int(r["id"]): int(r["sell_difficulty_score"]) for _, r in hard.iterrows()}
-    sold = simulate_sales(bike_ids, scores, trial_num=ctx["trial_num"])
+    try:
+        sold = simulate_sales(bike_ids, scores, trial_num=ctx["trial_num"])
+    except Exception as e:
+        print(f"error ({e})", end="", flush=True)
+        ctx["auto_sold"] = []
+        return ctx
     if sold:
         print(f"sold {len(sold)}: {sold}", end="", flush=True)
     else:

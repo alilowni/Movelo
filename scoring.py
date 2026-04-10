@@ -197,58 +197,81 @@ def simulate_sales(bike_ids: list[int], scores: dict[int, int],
         prob = base * (6 - score) / 5
         if random.random() < prob:
             sold.append(bid)
-            mark_bike_sold(bid, csv_path)
+            try:
+                mark_bike_sold(bid, csv_path)
+            except Exception as e:
+                print(f"  WARN: failed to mark bike {bid} as sold: {e}")
 
     if sold:
-        _stamp_sold_in_log(sold, trial_num, trials_path)
-        _record_sale_insights(sold, trial_num, csv_path, trials_path)
+        try:
+            _stamp_sold_in_log(sold, trial_num, trials_path)
+        except Exception as e:
+            print(f"  WARN: failed to stamp sold in log: {e}")
+        try:
+            _record_sale_insights(sold, trial_num, csv_path, trials_path)
+        except Exception as e:
+            print(f"  WARN: knowledge base update failed: {e}")
     return sold
 
 
 def _record_sale_insights(sold_ids: list[int], trial_num: int,
                           csv_path: str, trials_path: str) -> None:
     # Ask LLM why each sold bike likely sold, save to knowledge base
-    from agents import summarize_sale_reason
+    try:
+        from agents import summarize_sale_reason
+    except Exception as e:
+        print(f"  WARN: could not import summarize_sale_reason: {e}")
+        return
 
-    bikes = load_and_score(csv_path)
-    campaigns = load_campaigns(trials_path)
+    try:
+        bikes = load_and_score(csv_path)
+        campaigns = load_campaigns(trials_path)
+    except Exception as e:
+        print(f"  WARN: could not load data for sale insights: {e}")
+        return
 
     rows = []
     for bid in sold_ids:
-        bike_match = bikes[bikes["id"] == bid]
-        if bike_match.empty:
-            continue
-        b = bike_match.iloc[0]
-
-        bike_camps = campaigns[campaigns["bike_id"] == bid].sort_values("trial_num")
-        last = bike_camps.iloc[-1].to_dict() if not bike_camps.empty else {}
-        n_campaigns = len(bike_camps)
-
         try:
-            note = summarize_sale_reason(b, last, n_campaigns)
-        except Exception as e:
-            note = f"(auto-note unavailable: {e})"
+            bike_match = bikes[bikes["id"] == bid]
+            if bike_match.empty:
+                continue
+            b = bike_match.iloc[0]
 
-        rows.append({
-            "bike_id": int(bid),
-            "trial_num": int(trial_num),
-            "date": str(last.get("date", "")),
-            "title": b.get("title", ""),
-            "brand": b.get("brand", ""),
-            "category": b.get("category", ""),
-            "price": float(b.get("price", 0) or 0),
-            "sell_difficulty_score": int(b.get("sell_difficulty_score", 0) or 0)
-                if "sell_difficulty_score" in b else 0,
-            "days_on_market": int(b.get("days_on_market", 0) or 0),
-            "campaigns_run": int(n_campaigns),
-            "selling_angle": last.get("selling_angle", ""),
-            "target_audience": last.get("target_audience", ""),
-            "tone": last.get("tone", ""),
-            "reason_note": note,
-        })
+            bike_camps = campaigns[campaigns["bike_id"] == bid].sort_values("trial_num")
+            last = bike_camps.iloc[-1].to_dict() if not bike_camps.empty else {}
+            n_campaigns = len(bike_camps)
+
+            try:
+                note = summarize_sale_reason(b, last, n_campaigns)
+            except Exception as e:
+                note = f"(auto-note unavailable: {e})"
+
+            rows.append({
+                "bike_id": int(bid),
+                "trial_num": int(trial_num),
+                "date": str(last.get("date", "")),
+                "title": b.get("title", ""),
+                "brand": b.get("brand", ""),
+                "category": b.get("category", ""),
+                "price": float(b.get("price", 0) or 0),
+                "sell_difficulty_score": int(b.get("sell_difficulty_score", 0) or 0)
+                    if "sell_difficulty_score" in b else 0,
+                "days_on_market": int(b.get("days_on_market", 0) or 0),
+                "campaigns_run": int(n_campaigns),
+                "selling_angle": last.get("selling_angle", ""),
+                "target_audience": last.get("target_audience", ""),
+                "tone": last.get("tone", ""),
+                "reason_note": note,
+            })
+        except Exception as e:
+            print(f"  WARN: skipping insight for bike {bid}: {e}")
 
     if rows:
-        append_knowledge_base(rows)
+        try:
+            append_knowledge_base(rows)
+        except Exception as e:
+            print(f"  WARN: failed to write knowledge base: {e}")
 
 
 # Knowledge base
@@ -269,10 +292,13 @@ def load_knowledge_base(path: str = None) -> pd.DataFrame:
 
 
 def append_knowledge_base(records: list[dict], path: str = None) -> None:
-    path = path or cfg.KNOWLEDGE_BASE_PATH
-    _ensure_knowledge_base(path)
-    new_df = pd.DataFrame(records, columns=KB_COLUMNS)
-    new_df.to_csv(path, mode="a", header=False, index=False)
+    try:
+        path = path or cfg.KNOWLEDGE_BASE_PATH
+        _ensure_knowledge_base(path)
+        new_df = pd.DataFrame(records, columns=KB_COLUMNS)
+        new_df.to_csv(path, mode="a", header=False, index=False)
+    except Exception as e:
+        print(f"  WARN: could not append to knowledge base: {e}")
 
 
 def _stamp_sold_in_log(sold_ids: list[int], trial_num: int,
@@ -320,10 +346,13 @@ def next_campaign_number(path: str = None) -> int:
 
 
 def log_campaign(records: list[dict], path: str = None) -> None:
-    path = path or cfg.CAMPAIGNS_PATH
-    _ensure_campaigns(path)
-    new_df = pd.DataFrame(records, columns=CAMPAIGN_COLUMNS)
-    new_df.to_csv(path, mode="a", header=False, index=False)
+    try:
+        path = path or cfg.CAMPAIGNS_PATH
+        _ensure_campaigns(path)
+        new_df = pd.DataFrame(records, columns=CAMPAIGN_COLUMNS)
+        new_df.to_csv(path, mode="a", header=False, index=False)
+    except Exception as e:
+        print(f"  WARN: could not write campaign log: {e}")
 
 
 def load_bike_campaign_history(bike_id: int, path: str = None) -> list[dict]:
