@@ -1,3 +1,5 @@
+# AI agents — manager, marketer, image gen, sale reason analysis.
+
 import hashlib
 import json
 import re
@@ -12,7 +14,8 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import SystemMessage, HumanMessage
 
 import config as cfg
-from scoring import load_trial_history_for_bike
+import prompts
+from scoring import load_bike_campaign_history
 
 OUTPUT_DIR = Path(cfg.OUTPUT_DIR)
 IMAGE_CACHE_DIR = OUTPUT_DIR / ".image_cache"
@@ -22,9 +25,7 @@ def _make_llm(temperature: float = 0.7) -> ChatGoogleGenerativeAI:
     return ChatGoogleGenerativeAI(model=cfg.LLM_MODEL, temperature=temperature)
 
 
-# ---------------------------------------------------------------------------
 # API health checks
-# ---------------------------------------------------------------------------
 
 def test_llm_api() -> bool:
     try:
@@ -55,12 +56,10 @@ def test_image_api() -> bool:
         return False
 
 
-# ---------------------------------------------------------------------------
-# Bike context builder (compact for token efficiency)
-# ---------------------------------------------------------------------------
+# Bike context builders
 
 def _bike_context(row: pd.Series) -> str:
-    """Compact bike context string. Includes only relevant fields + short history."""
+    # Compact one-liner with key fields + short campaign history
     color = row.get("color", "")
     color_str = f", Color: {color}" if pd.notna(color) and color else ""
     km = row["km_ridden"]
@@ -76,7 +75,7 @@ def _bike_context(row: pd.Series) -> str:
         f"{color_str}{desc_str}"
     )
 
-    history = load_trial_history_for_bike(int(row["id"]))
+    history = load_bike_campaign_history(int(row["id"]))
     if history:
         past = []
         for h in history:
@@ -90,7 +89,7 @@ def _bike_context(row: pd.Series) -> str:
 
 
 def _bike_image_context(row: pd.Series) -> str:
-    """Extracted visual details for image generation prompts."""
+    # Visual details used in image generation prompts
     parts = [f"{row['brand']} {row['title']}"]
     cat = row.get("category", "")
     if pd.notna(cat) and cat:
@@ -135,9 +134,7 @@ def trial_output_dir(trial_num: int) -> Path:
     return d
 
 
-# ---------------------------------------------------------------------------
-# Image download
-# ---------------------------------------------------------------------------
+# Image download (with disk cache)
 
 def _download_image(url: str) -> bytes | None:
     if not url:
@@ -167,45 +164,10 @@ def _mime_from_url(url: str) -> str:
     return "image/webp"
 
 
-# ---------------------------------------------------------------------------
-# Marketing Manager
-# ---------------------------------------------------------------------------
-
-MANAGER_SYSTEM_PROMPT = """\
-You are a marketing manager for movelo, a refurbished bike shop.
-Analyze hard-to-sell bikes and create a brief for each.
-
-RULES:
-- Be concise. No filler.
-- If a bike has PAST campaigns listed, you MUST pick a different angle, \
-audience, and tone. Never repeat what was tried.
-- After 3+ failed campaigns, try a radically different approach.
-
-For EACH bike return JSON:
-- bike_id (int)
-- target_audience (short, specific)
-- selling_angle (1 sentence max)
-- content_types (list: "instagram_post", "email", "image_ad")
-- tone (1 word)
-- key_message (1 sentence)
-- why_different (1 sentence if past campaigns exist, else "first campaign")
-
-Reply ONLY with a JSON array.
-"""
-
-
-SALE_REASON_SYSTEM_PROMPT = """\
-You are a marketing analyst for movelo (refurbished bikes).
-A bike has just SOLD. In ONE short sentence (max 25 words), state the most \
-likely reason it sold — the angle, audience match, tone, price/condition fit, \
-timing, or persistence. Be concrete and useful for future campaigns. \
-No filler, no hedging, no "perhaps". Reply with the sentence only.
-"""
-
+# Sale reason — short note on why a bike sold
 
 def summarize_sale_reason(bike_row: pd.Series, last_campaign: dict,
                           campaigns_run: int) -> str:
-    """Generate a one-sentence note explaining why a bike likely sold."""
     llm = _make_llm(temperature=0.3)
     km = bike_row.get("km_ridden")
     km_str = f"{int(km)} km" if pd.notna(km) else "unknown km"
@@ -232,7 +194,7 @@ def summarize_sale_reason(bike_row: pd.Series, last_campaign: dict,
     payload = f"{bike_line}\n{camp_line}"
     try:
         response = llm.invoke([
-            SystemMessage(content=SALE_REASON_SYSTEM_PROMPT),
+            SystemMessage(content=prompts.SALE_REASON),
             HumanMessage(content=payload),
         ])
         text = (response.content or "").strip().strip('"').strip()
@@ -241,13 +203,15 @@ def summarize_sale_reason(bike_row: pd.Series, last_campaign: dict,
         return f"(LLM error: {e})"
 
 
+# Marketing Manager agent
+
 def run_manager_agent(bikes_df: pd.DataFrame, max_retries: int = 2) -> list[dict]:
     llm = _make_llm(temperature=cfg.MANAGER_TEMPERATURE)
     bike_texts = "\n".join(_bike_context(row) for _, row in bikes_df.iterrows())
     for attempt in range(max_retries):
         try:
             response = llm.invoke([
-                SystemMessage(content=MANAGER_SYSTEM_PROMPT),
+                SystemMessage(content=prompts.MANAGER),
                 HumanMessage(content=bike_texts),
             ])
         except Exception as e:
@@ -256,45 +220,12 @@ def run_manager_agent(bikes_df: pd.DataFrame, max_retries: int = 2) -> list[dict
         result = _parse_json_response(response.content, "Manager")
         if result is not None:
             return result
-        print(f"  Retrying manager ({attempt + 1}/{max_retries})...")
-    print("  ERROR: Manager failed after retries.")
+        print(f" retry {attempt + 1}", end="", flush=True)
+    print("\nERROR: Manager failed after retries.")
     sys.exit(1)
 
 
-# ---------------------------------------------------------------------------
-# Marketer
-# ---------------------------------------------------------------------------
-
-MARKETER_SYSTEM_PROMPT = """\
-You are a marketer for movelo, a refurbished bike shop based in the Netherlands.
-You receive briefs and produce content. Be concise.
-
-For EACH brief produce:
-- bike_id (int)
-- instagram_caption: Casual, slightly playful tone. Short (max 120 words). \
-Include 5-8 relevant hashtags at the end. Don't overdo emojis (max 2). \
-Focus on the lifestyle benefit, not specs.
-- email_subject: Short, direct, max 8 words. Dutch communication style.
-- email_body: Clean, professional, direct. 2-3 sentences max. \
-No hype, no exclamation marks. State the value clearly. \
-Think Dutch directness: what it is, why it matters, what to do next.
-- image_prompt_a: PRIMARY lifestyle photo. Use the exact bike details \
-(brand, model, color, type) from the data. IMPORTANT: Match the bike category — \
-if the bike is a City/E-City/Urban bike, use a city/urban setting (Dutch streets, \
-canal bridge, bike lane). If it is a Trekking/E-Trekking/MTB/Gravel bike, use a \
-nature/trail setting. Describe: rider (~30yo), setting, lighting, mood, outfit. \
-The brand name must be visible on the bike frame. \
-Include a small "movelo" watermark/logo in the bottom-right corner. \
-Keep under 80 words. Must say "photo advertisement for movelo refurbished bike shop".
-- image_prompt_b: SECONDARY lifestyle photo. Same bike details. \
-Different setting from prompt A. If prompt A was urban, make this one a park/nature \
-scene. If prompt A was nature, make this one urban. Same branding rules: \
-brand name visible on bike, small "movelo" logo bottom-right corner. \
-Under 80 words. Must say "photo advertisement for movelo refurbished bike shop".
-
-Reply ONLY with a JSON array.
-"""
-
+# Marketer agent — processes briefs in batches of 5
 
 MARKETER_BATCH_SIZE = 5
 MARKETER_MAX_RETRIES = 2
@@ -311,7 +242,6 @@ def run_marketer_agent(briefs: list[dict], bikes_df: pd.DataFrame) -> list[dict]
     for i in range(0, len(briefs), MARKETER_BATCH_SIZE):
         batch = briefs[i : i + MARKETER_BATCH_SIZE]
         batch_ids = [b.get("bike_id") for b in batch]
-        print(f"  marketer batch {i // MARKETER_BATCH_SIZE + 1} — bikes {batch_ids}")
 
         context_parts = []
         for brief in batch:
@@ -326,7 +256,7 @@ def run_marketer_agent(briefs: list[dict], bikes_df: pd.DataFrame) -> list[dict]
         for attempt in range(MARKETER_MAX_RETRIES):
             try:
                 response = llm.invoke([
-                    SystemMessage(content=MARKETER_SYSTEM_PROMPT),
+                    SystemMessage(content=prompts.MARKETER),
                     HumanMessage(content=payload),
                 ])
             except Exception as e:
@@ -335,19 +265,17 @@ def run_marketer_agent(briefs: list[dict], bikes_df: pd.DataFrame) -> list[dict]
             result = _parse_json_response(response.content, "Marketer")
             if result is not None:
                 break
-            print(f"  Retrying marketer batch ({attempt + 1}/{MARKETER_MAX_RETRIES})...")
+            print(f" retry {attempt + 1}", end="", flush=True)
 
         if result is None:
-            print(f"  ERROR: Marketer batch failed after retries for bikes {batch_ids}")
+            print(f"\nERROR: Marketer batch failed for bikes {batch_ids}")
             sys.exit(1)
         all_results.extend(result)
 
     return all_results
 
 
-# ---------------------------------------------------------------------------
-# Image Generation
-# ---------------------------------------------------------------------------
+# Image generation
 
 def generate_images(content_list: list[dict], bikes_df: pd.DataFrame,
                     trial_num: int) -> dict:
@@ -385,31 +313,25 @@ def generate_images(content_list: list[dict], bikes_df: pd.DataFrame,
                 continue
 
             fpath = folder / f"{label}.png"
-            print(f"  bike {bid} / {label} ...", end=" ", flush=True)
+            print(f"\n    {bid}/{label} ", end="", flush=True)
             try:
                 contents = []
-                brand_inst = (
-                    f"The brand name '{visual.split(',')[0].split()[0]}' "
-                    f"must be visible on the bike frame. "
-                    f"Include a small 'movelo' watermark in the bottom-right corner."
-                )
+                brand = visual.split(",")[0].split()[0]
+                brand_inst = prompts.BRAND_INSTRUCTION.format(brand=brand)
                 if has_ref:
                     contents.append(genai_types.Part.from_bytes(
                         data=bike_image_bytes,
                         mime_type=_mime_from_url(bike_image_url),
                     ))
                     contents.append(genai_types.Part.from_text(
-                        text=(
-                            f"Generate a realistic lifestyle photo ad featuring "
-                            f"THIS exact bike from the reference image. "
-                            f"Bike: {visual}. {brand_inst} {prompt}"
+                        text=prompts.IMAGE_WITH_REF.format(
+                            visual=visual, brand_inst=brand_inst, prompt=prompt,
                         )
                     ))
                 else:
                     contents.append(genai_types.Part.from_text(
-                        text=(
-                            f"Generate a realistic lifestyle photo. "
-                            f"Bike: {visual}. {brand_inst} {prompt}"
+                        text=prompts.IMAGE_NO_REF.format(
+                            visual=visual, brand_inst=brand_inst, prompt=prompt,
                         )
                     ))
 
@@ -427,14 +349,14 @@ def generate_images(content_list: list[dict], bikes_df: pd.DataFrame,
                         break
 
                 if not image_bytes:
-                    print("no image in response")
+                    print("skip", end="", flush=True)
                     continue
 
                 fpath.write_bytes(image_bytes)
                 paths.append(str(fpath))
-                print("OK")
+                print("ok", end="", flush=True)
             except Exception as e:
-                print(f"FAILED ({e})")
+                print(f"fail", end="", flush=True)
 
         results[bid] = {"folder": str(folder), "images": paths}
 

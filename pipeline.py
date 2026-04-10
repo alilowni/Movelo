@@ -1,9 +1,4 @@
-"""
-Pipeline factory for the movelo marketing workflow.
-
-Provides a simple, extensible Pipeline that chains named steps.
-Each step is a callable: fn(context: dict) -> dict.
-"""
+# Pipeline factory — chains named steps, passes a shared context dict.
 
 from __future__ import annotations
 
@@ -14,7 +9,7 @@ StepFn = Callable[[dict], dict]
 
 
 class Pipeline:
-    """Ordered sequence of named steps sharing a mutable context dict."""
+    # Ordered sequence of named steps sharing a mutable context dict.
 
     def __init__(self) -> None:
         self._steps: list[tuple[str, StepFn]] = []
@@ -50,9 +45,9 @@ class Pipeline:
         total = len(self._steps)
         for i, (name, fn) in enumerate(self._steps, 1):
             t0 = time.time()
-            print(f"\n[{i}/{total}] {name}")
+            print(f"[{i}/{total}] {name} ", end="", flush=True)
             ctx = fn(ctx)
             elapsed = time.time() - t0
-            print(f"  done ({elapsed:.1f}s)")
-        print(f"\nPipeline complete ({total} steps)")
+            print(f" ({elapsed:.1f}s)")
+        print(f"\nDone — {total} steps complete.")
         return ctx

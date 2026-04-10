@@ -1,12 +1,8 @@
-"""
-One-time migration: read existing output/trial_N/bike_*/content.json files
-and backfill them into trials_log.csv.
-
-Also strips any campaign_trial_* columns from the master bike CSV.
-
-Usage:
-    python migrate_trials.py
-"""
+# One-time migration script (already run, kept for reference).
+# Reads output/trial_N/bike_*/content.json and backfills campaigns.csv.
+# Also strips legacy campaign_trial_* columns from the master CSV.
+#
+# Usage: python migrate_trials.py
 
 import json
 import os
@@ -17,9 +13,9 @@ import pandas as pd
 
 import config as cfg
 from scoring import (
-    TRIALS_LOG_COLUMNS,
-    log_trial_to_csv,
-    load_trials,
+    CAMPAIGN_COLUMNS,
+    log_campaign,
+    load_campaigns,
 )
 
 OUTPUT_DIR = Path("output")
@@ -31,12 +27,12 @@ def _extract_bike_id(folder_name: str) -> int | None:
 
 
 def backfill_from_output() -> int:
-    """Scan output/trial_N/ folders and create trials_log.csv rows."""
+    # Scan output/trial_N/ folders and create campaigns.csv rows
     if not OUTPUT_DIR.exists():
         print("No output/ directory found -- nothing to migrate.")
         return 0
 
-    existing = load_trials()
+    existing = load_campaigns()
     existing_keys = set()
     if not existing.empty:
         existing_keys = set(
@@ -83,12 +79,13 @@ def backfill_from_output() -> int:
                 "image_prompt_b": c.get("image_prompt_b", "") or "",
                 "urban_image_path": str(urban_path) if urban_path.exists() else "",
                 "nature_image_path": str(nature_path) if nature_path.exists() else "",
+                "sold_in_campaign": "",
             }
             records.append(record)
 
     if records:
-        log_trial_to_csv(records)
-        print(f"  Backfilled {len(records)} records into {cfg.TRIALS_LOG_PATH}")
+        log_campaign(records)
+        print(f"  Backfilled {len(records)} records into {cfg.CAMPAIGNS_PATH}")
     else:
         print("  No new records to backfill.")
 
@@ -96,7 +93,7 @@ def backfill_from_output() -> int:
 
 
 def strip_trial_columns_from_master() -> None:
-    """Remove any campaign_trial_* columns from the master bike CSV."""
+    # Remove legacy campaign_trial_* columns from the master bike CSV
     df = pd.read_csv(cfg.CSV_PATH)
     trial_cols = [c for c in df.columns if c.startswith("campaign_trial_")]
     if not trial_cols:
@@ -108,10 +105,10 @@ def strip_trial_columns_from_master() -> None:
 
 
 if __name__ == "__main__":
-    print("=== Backfilling trials from output/ folders ===")
+    print("=== Backfilling campaigns from output/ folders ===")
     backfill_from_output()
     print()
     print("=== Cleaning master CSV ===")
     strip_trial_columns_from_master()
     print()
-    print("Done. Check trials_log.csv for the migrated data.")
+    print("Done. Check campaigns.csv for the migrated data.")

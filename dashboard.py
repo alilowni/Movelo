@@ -1,11 +1,7 @@
-"""
-movelo Marketing Dashboard
-
-Run with:
-    streamlit run dashboard.py
-    -- or --
-    python main.py --dashboard
-"""
+# movelo Marketing Dashboard
+#
+# streamlit run dashboard.py
+# python main.py --dashboard
 
 import subprocess
 import sys
@@ -14,11 +10,14 @@ import streamlit as st
 from pathlib import Path
 
 from scoring import (
+    init_working_files,
     load_and_score,
-    load_trials,
-    join_bikes_and_trials,
+    load_campaigns,
+    join_bikes_and_campaigns,
     load_knowledge_base,
 )
+
+init_working_files()
 
 st.set_page_config(page_title="movelo Dashboard", page_icon="🚲", layout="wide")
 
@@ -29,13 +28,13 @@ def get_bikes() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=10)
-def get_trials() -> pd.DataFrame:
-    return load_trials()
+def get_campaigns() -> pd.DataFrame:
+    return load_campaigns()
 
 
 @st.cache_data(ttl=10)
 def get_joined() -> pd.DataFrame:
-    return join_bikes_and_trials()
+    return join_bikes_and_campaigns()
 
 
 @st.cache_data(ttl=10)
@@ -55,9 +54,7 @@ def status_badge(status: str) -> str:
     return "🏷 SOLD" if status == "sold" else "✅ Available"
 
 
-# ---------------------------------------------------------------------------
-# Campaign card renderer
-# ---------------------------------------------------------------------------
+# Campaign card
 
 def _render_campaign_card(row: pd.Series, bikes_df: pd.DataFrame) -> None:
     bid = int(row["bike_id"])
@@ -117,9 +114,7 @@ def _render_campaign_card(row: pd.Series, bikes_df: pd.DataFrame) -> None:
                     st.image(str(nature_path), caption="Nature ad", width="stretch")
 
 
-# ---------------------------------------------------------------------------
 # Sidebar
-# ---------------------------------------------------------------------------
 
 st.sidebar.title("movelo")
 st.sidebar.caption("Refurbished Bike Marketing Dashboard")
@@ -135,9 +130,7 @@ if st.sidebar.button("Refresh data"):
     st.rerun()
 
 
-# ---------------------------------------------------------------------------
-# Page 1: Bike Inventory
-# ---------------------------------------------------------------------------
+# Page: Bike Inventory
 
 if page == "Bike Inventory":
     st.title("Bike Inventory")
@@ -237,13 +230,11 @@ if page == "Bike Inventory":
                 st.info("Sales happen automatically at the end of each campaign.")
 
 
-# ---------------------------------------------------------------------------
-# Page 2: Campaigns
-# ---------------------------------------------------------------------------
+# Page: Campaigns
 
 elif page == "Campaigns":
     st.title("Marketing Campaigns")
-    trials = get_trials()
+    trials = get_campaigns()
     bikes_df = get_bikes()
 
     if trials.empty:
@@ -303,14 +294,12 @@ elif page == "Campaigns":
                     _render_campaign_card(row, bikes_df)
 
 
-# ---------------------------------------------------------------------------
-# Page 3: Run Campaign (next day)
-# ---------------------------------------------------------------------------
+# Page: Run Campaign
 
 elif page == "Run Campaign":
     st.title("Run Next Campaign")
     bikes_df = get_bikes()
-    trials = get_trials()
+    trials = get_campaigns()
 
     n_avail = len(bikes_df[bikes_df["status"] != "sold"])
     n_sold = len(bikes_df[bikes_df["status"] == "sold"])
@@ -358,14 +347,12 @@ elif page == "Run Campaign":
             st.markdown("Refresh the page or click **Campaigns** to see results.")
 
 
-# ---------------------------------------------------------------------------
-# Page 4: Analytics
-# ---------------------------------------------------------------------------
+# Page: Analytics
 
 elif page == "Analytics":
     st.title("Analytics")
     bikes_df = get_bikes()
-    trials = get_trials()
+    trials = get_campaigns()
     joined = get_joined()
 
     n_avail = len(bikes_df[bikes_df["status"] != "sold"])
@@ -409,7 +396,7 @@ elif page == "Analytics":
         for _, r in never_marketed.iterrows():
             st.markdown(f"- **[{r['id']}] {r['title']}** — €{r['price']:.0f}, score {r['sell_difficulty_score']}, {r['days_on_market']} days")
 
-    # -- Trend charts --
+    # Trend charts
     if not trials.empty and "date" in trials.columns:
         st.markdown("### Trends")
         campaign_dates = (
@@ -488,9 +475,7 @@ elif page == "Analytics":
     st.dataframe(display_joined[show_cols], width="stretch", hide_index=True)
 
 
-# ---------------------------------------------------------------------------
-# Page 5: Knowledge Base
-# ---------------------------------------------------------------------------
+# Page: Knowledge Base
 
 elif page == "Knowledge Base":
     st.title("Sales Knowledge Base")

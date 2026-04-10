@@ -1,13 +1,8 @@
-"""
-movelo Refurbished Bike Marketing Pipeline
-
-Usage:
-    python main.py                 Run one campaign (advances 1 day)
-    python main.py --test-api      Test API connections only
-    python main.py --dashboard     Launch the Streamlit dashboard
-
-All settings are controlled via .env (see .env.example).
-"""
+# movelo — Refurbished Bike Marketing Pipeline
+#
+# python main.py              Run one campaign (advances 1 day)
+# python main.py --test-api   Test API connections only
+# python main.py --dashboard  Launch the Streamlit dashboard
 
 import argparse
 import os
@@ -21,10 +16,11 @@ load_dotenv()
 import config as cfg
 from pipeline import Pipeline
 from scoring import (
+    init_working_files,
     load_and_score,
     filter_hard_to_sell,
-    next_trial_number,
-    log_trial_to_csv,
+    next_campaign_number,
+    log_campaign,
     advance_day,
     simulate_sales,
 )
@@ -44,40 +40,32 @@ def preflight() -> None:
 
 
 def run_api_tests() -> bool:
-    print("Testing LLM API ...", end=" ", flush=True)
+    print("API check: ", end="", flush=True)
     llm_ok = test_llm_api()
-    print("OK" if llm_ok else "FAILED")
-
-    print("Testing Image API ...", end=" ", flush=True)
+    print(f"LLM {'ok' if llm_ok else 'FAIL'}", end=" | ", flush=True)
     img_ok = test_image_api()
-    print("OK" if img_ok else "FAILED")
-
-    if llm_ok and img_ok:
-        print("All API tests passed.")
-    else:
-        print("Some API tests failed.")
+    print(f"Image {'ok' if img_ok else 'FAIL'}")
+    if not (llm_ok and img_ok):
+        print("  Some API tests failed.")
     return llm_ok and img_ok
 
 
-# ---------------------------------------------------------------------------
 # Pipeline steps
-# ---------------------------------------------------------------------------
 
 def step_advance_day(ctx: dict) -> dict:
     advance_day()
-    print("  +1 day for all available bikes")
     return ctx
 
 
 def step_score(ctx: dict) -> dict:
     df = load_and_score()
-    trial_num = next_trial_number()
+    trial_num = next_campaign_number()
     avail = df[df["status"] != "sold"]
     n_sold = len(df) - len(avail)
     danger = len(avail[avail["sell_difficulty_score"] >= cfg.HARD_SELL_THRESHOLD])
     max_day = int(avail["days_on_market"].max()) if not avail.empty else 0
-    print(f"  Campaign {trial_num} | {len(avail)} available, {n_sold} sold | "
-          f"{danger} in danger (>={cfg.HARD_SELL_THRESHOLD}) | day {max_day}")
+    print(f"#{trial_num} | {len(avail)} avail, {n_sold} sold, "
+          f"{danger} in danger | day {max_day}", end="", flush=True)
     ctx["df"] = df
     ctx["trial_num"] = trial_num
     return ctx
@@ -86,36 +74,36 @@ def step_score(ctx: dict) -> dict:
 def step_filter(ctx: dict) -> dict:
     hard = filter_hard_to_sell(ctx["df"])
     cap = cfg.MAX_BIKES_PER_CAMPAIGN
+    total_danger = len(hard)
     if len(hard) > cap:
         hard = hard.sort_values("sell_difficulty_score", ascending=False).head(cap)
-        print(f"  {len(ctx['df'][ctx['df']['status'] != 'sold'])} in danger, capped to top {cap}")
     ids = [int(r["id"]) for _, r in hard.iterrows()]
-    print(f"  {len(hard)} bikes targeted: {ids}")
+    msg = f"{len(hard)} bikes"
+    if total_danger > cap:
+        msg += f" (of {total_danger} in danger)"
+    print(f"{msg}: {ids}", end="", flush=True)
     ctx["hard"] = hard
     return ctx
 
 
 def step_manager(ctx: dict) -> dict:
     briefs = run_manager_agent(ctx["hard"])
-    for b in briefs:
-        print(f"  bike {b.get('bike_id')}: {b.get('selling_angle', '?')[:60]}")
+    print(f"{len(briefs)} briefs", end="", flush=True)
     ctx["briefs"] = briefs
     return ctx
 
 
 def step_marketer(ctx: dict) -> dict:
     content = run_marketer_agent(ctx["briefs"], ctx["hard"])
-    for c in content:
-        subj = c.get("email_subject", "") or "(no email)"
-        print(f"  bike {c.get('bike_id')}: {subj}")
+    print(f"{len(content)} content pieces", end="", flush=True)
     ctx["content"] = content
     return ctx
 
 
 def step_images(ctx: dict) -> dict:
     img_results = generate_images(ctx["content"], ctx["hard"], ctx["trial_num"])
-    for bid, info in img_results.items():
-        print(f"  bike {bid}: {len(info['images'])} images")
+    total_imgs = sum(len(info["images"]) for info in img_results.values())
+    print(f"{total_imgs} images for {len(img_results)} bikes", end="", flush=True)
     ctx["img_results"] = img_results
     return ctx
 
@@ -169,8 +157,8 @@ def step_log(ctx: dict) -> dict:
             "sold_in_campaign": "",
         })
 
-    log_trial_to_csv(records)
-    print(f"  {len(records)} records logged")
+    log_campaign(records)
+    print(f"{len(records)} records", end="", flush=True)
     ctx["records"] = records
     return ctx
 
@@ -181,16 +169,14 @@ def step_auto_sell(ctx: dict) -> dict:
     scores = {int(r["id"]): int(r["sell_difficulty_score"]) for _, r in hard.iterrows()}
     sold = simulate_sales(bike_ids, scores, trial_num=ctx["trial_num"])
     if sold:
-        print(f"  Auto-sold: {sold}")
+        print(f"sold {len(sold)}: {sold}", end="", flush=True)
     else:
-        print(f"  No auto-sales this round")
+        print(f"no sales", end="", flush=True)
     ctx["auto_sold"] = sold
     return ctx
 
 
-# ---------------------------------------------------------------------------
-# Pipeline
-# ---------------------------------------------------------------------------
+# Pipeline assembly
 
 def build_pipeline() -> Pipeline:
     pipe = Pipeline()
@@ -207,10 +193,9 @@ def build_pipeline() -> Pipeline:
 
 def run_once() -> None:
     preflight()
-    print("API tests...")
+    init_working_files()
     if not run_api_tests():
         sys.exit(1)
-    print()
     build_pipeline().run()
 
 
