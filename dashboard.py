@@ -3,6 +3,7 @@
 # streamlit run dashboard.py
 # python main.py --dashboard
 
+import re
 import subprocess
 import sys
 import pandas as pd
@@ -52,6 +53,89 @@ def danger_color(score: int) -> str:
 
 def status_badge(status: str) -> str:
     return "🏷 SOLD" if status == "sold" else "✅ Available"
+
+
+# Pipeline log parser
+
+def _parse_pipeline_log(raw: str) -> tuple[str, str]:
+    # Returns (clean_log, summary_label)
+    lines = []
+    campaign_num = "?"
+    sold_text = "no sales"
+    total_seconds = 0.0
+    current_step = None
+
+    for line in raw.splitlines():
+        s = line.strip()
+        if not s or s.startswith("Done"):
+            continue
+
+        is_step = bool(re.match(r"^\[\d+/\d+\]", s))
+        tm = re.search(r"\((\d+\.?\d*)s\)\s*$", s)
+
+        if tm:
+            total_seconds += float(tm.group(1))
+
+        cn = re.search(r"#(\d+)", s)
+        if cn:
+            campaign_num = cn.group(1)
+
+        sm = re.search(r"sold (\d+):", s)
+        if sm:
+            sold_text = f"{sm.group(1)} sold"
+
+        if s.startswith("API check:"):
+            lines.append(f"  ✓  {s}")
+        elif is_step and tm:
+            clean = re.sub(r"^\[\d+/\d+\]\s*", "", s)
+            lines.append(f"  ✓  {clean}")
+            current_step = None
+        elif is_step and not tm:
+            m = re.match(r"^\[\d+/\d+\]\s*(.+)", s)
+            current_step = m.group(1).strip() if m else None
+        elif not is_step and tm:
+            detail = re.sub(r"\s*\(\d+\.?\d*s\)\s*$", "", s).strip()
+            t = tm.group(0)
+            prefix = f"{current_step}  " if current_step else ""
+            lines.append(f"  ✓  {prefix}{detail} {t}")
+            current_step = None
+
+    log = "\n".join(lines)
+    label = f"Campaign {campaign_num} · {sold_text} · {total_seconds:.0f}s"
+    return log, label
+
+
+# Campaign runner
+
+def _run_campaign():
+    bikes_df = get_bikes()
+    n_avail = len(bikes_df[bikes_df["status"] != "sold"])
+    if n_avail == 0:
+        st.toast("All bikes are already sold.", icon="✅")
+        return
+
+    with st.status("Running campaign...", expanded=True) as status:
+        result = subprocess.run(
+            [sys.executable, "main.py"],
+            capture_output=True, text=True,
+            cwd=str(Path(__file__).parent), timeout=600,
+        )
+        raw = result.stdout or ""
+        if result.stderr:
+            raw += "\n" + result.stderr
+
+        if result.returncode == 0:
+            log, label = _parse_pipeline_log(raw)
+            st.code(log, language=None)
+            with st.expander("Raw output"):
+                st.code(raw, language=None)
+            status.update(label=label, state="complete", expanded=False)
+            st.toast("Campaign complete!", icon="✅")
+        else:
+            st.code(raw, language=None)
+            status.update(label="Campaign failed", state="error")
+
+    st.cache_data.clear()
 
 
 # Campaign card
@@ -121,13 +205,22 @@ st.sidebar.caption("Refurbished Bike Marketing Dashboard")
 
 page = st.sidebar.radio(
     "Navigate",
-    ["Bike Inventory", "Campaigns", "Run Campaign", "Analytics", "Knowledge Base"],
+    ["Bike Inventory", "Campaigns", "Analytics", "Knowledge Base"],
 )
 
 st.sidebar.markdown("---")
-if st.sidebar.button("Refresh data"):
+sb1, sb2 = st.sidebar.columns(2)
+with sb1:
+    refresh_clicked = st.button("🔄 Refresh", use_container_width=True)
+with sb2:
+    run_clicked = st.button("▶ Campaign", type="primary", use_container_width=True)
+
+if refresh_clicked:
     st.cache_data.clear()
     st.rerun()
+
+if run_clicked:
+    _run_campaign()
 
 
 # Page: Bike Inventory
@@ -238,7 +331,7 @@ elif page == "Campaigns":
     bikes_df = get_bikes()
 
     if trials.empty:
-        st.info("No campaigns yet. Go to **Run Campaign** to start one.")
+        st.info("No campaigns yet. Click **▶ Campaign** in the sidebar to start one.")
     else:
         view_mode = st.radio("View by", ["Campaign", "Bike journey"],
                              horizontal=True, label_visibility="collapsed")
@@ -294,59 +387,6 @@ elif page == "Campaigns":
                     _render_campaign_card(row, bikes_df)
 
 
-# Page: Run Campaign
-
-elif page == "Run Campaign":
-    st.title("Run Next Campaign")
-    bikes_df = get_bikes()
-    trials = get_campaigns()
-
-    n_avail = len(bikes_df[bikes_df["status"] != "sold"])
-    n_sold = len(bikes_df[bikes_df["status"] == "sold"])
-    current_day = int(bikes_df[bikes_df["status"] != "sold"]["days_on_market"].max()) if n_avail > 0 else 0
-    n_campaigns = int(trials["trial_num"].max()) if not trials.empty else 0
-
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Day", current_day)
-    col2.metric("Campaigns", n_campaigns)
-    col3.metric("Available", n_avail)
-    col4.metric("Sold", n_sold)
-
-    if n_avail == 0:
-        st.success("All bikes are sold!")
-    else:
-        st.markdown(
-            f"Clicking the button below will **advance 1 day** (scores update), "
-            f"then run a full marketing campaign for hard-to-sell bikes."
-        )
-
-        if st.button("Run next campaign", type="primary"):
-            log_area = st.empty()
-            with st.spinner("Running simulation..."):
-                result = subprocess.run(
-                    [sys.executable, "main.py"],
-                    capture_output=True,
-                    text=True,
-                    cwd=str(Path(__file__).parent),
-                    timeout=600,
-                )
-                output = result.stdout
-                if result.stderr:
-                    output += "\n" + result.stderr
-
-            if result.returncode == 0:
-                st.success("Campaign complete!")
-            else:
-                st.error(f"Pipeline exited with code {result.returncode}")
-
-            st.markdown("### Pipeline log")
-            st.code(output, language=None)
-
-            st.cache_data.clear()
-            st.markdown("---")
-            st.markdown("Refresh the page or click **Campaigns** to see results.")
-
-
 # Page: Analytics
 
 elif page == "Analytics":
@@ -399,14 +439,6 @@ elif page == "Analytics":
     # Trend charts
     if not trials.empty and "date" in trials.columns:
         st.markdown("### Trends")
-        campaign_dates = (
-            trials.groupby("trial_num")["date"]
-            .first()
-            .reset_index()
-            .rename(columns={"date": "Date", "trial_num": "Campaign"})
-            .sort_values("Campaign")
-        )
-
         sold_flags = trials[trials["sold_in_campaign"] == "yes"].copy() if "sold_in_campaign" in trials.columns else pd.DataFrame()
 
         tcol1, tcol2 = st.columns(2)
@@ -489,7 +521,7 @@ elif page == "Knowledge Base":
 
     if kb.empty:
         st.info(
-            "No sales recorded yet. Run campaigns from **Run Campaign** — every "
+            "No sales recorded yet. Click **▶ Campaign** in the sidebar — every "
             "time a bike sells, an insight will be added here."
         )
     else:
