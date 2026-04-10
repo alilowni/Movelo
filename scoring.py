@@ -221,7 +221,7 @@ def _record_sale_insights(sold_ids: list[int], trial_num: int,
         from agents import summarize_sale_reason
     except Exception as e:
         print(f"  WARN: could not import summarize_sale_reason: {e}")
-        return
+        summarize_sale_reason = None
 
     try:
         bikes = load_and_score(csv_path)
@@ -233,19 +233,24 @@ def _record_sale_insights(sold_ids: list[int], trial_num: int,
     rows = []
     for bid in sold_ids:
         try:
-            bike_match = bikes[bikes["id"] == bid]
+            bid = int(bid)
+            bike_match = bikes[bikes["id"].astype(int) == bid]
             if bike_match.empty:
+                print(f"  WARN: bike {bid} not found in inventory, skipping insight")
                 continue
             b = bike_match.iloc[0]
 
-            bike_camps = campaigns[campaigns["bike_id"] == bid].sort_values("trial_num")
+            bike_camps = campaigns[campaigns["bike_id"].astype(int) == bid].sort_values("trial_num")
             last = bike_camps.iloc[-1].to_dict() if not bike_camps.empty else {}
             n_campaigns = len(bike_camps)
 
-            try:
-                note = summarize_sale_reason(b, last, n_campaigns)
-            except Exception as e:
-                note = ""
+            note = ""
+            if summarize_sale_reason is not None:
+                try:
+                    note = summarize_sale_reason(b, last, n_campaigns)
+                except Exception as e:
+                    print(f"  WARN: LLM sale reason failed for bike {bid}: {e}")
+                    note = ""
 
             # Fallback: if LLM returned nothing useful, build a note from the data
             if not note or note.startswith("("):
@@ -263,30 +268,33 @@ def _record_sale_insights(sold_ids: list[int], trial_num: int,
                 note = "Sold with " + ", ".join(parts) + "."
 
             rows.append({
-                "bike_id": int(bid),
+                "bike_id": bid,
                 "trial_num": int(trial_num),
                 "date": str(last.get("date", "")),
-                "title": b.get("title", ""),
-                "brand": b.get("brand", ""),
-                "category": b.get("category", ""),
+                "title": str(b.get("title", "")),
+                "brand": str(b.get("brand", "")),
+                "category": str(b.get("category", "")),
                 "price": float(b.get("price", 0) or 0),
-                "sell_difficulty_score": int(b.get("sell_difficulty_score", 0) or 0)
-                    if "sell_difficulty_score" in b else 0,
+                "sell_difficulty_score": int(b.get("sell_difficulty_score", 0) or 0),
                 "days_on_market": int(b.get("days_on_market", 0) or 0),
                 "campaigns_run": int(n_campaigns),
-                "selling_angle": last.get("selling_angle", ""),
-                "target_audience": last.get("target_audience", ""),
-                "tone": last.get("tone", ""),
+                "selling_angle": str(last.get("selling_angle", "")),
+                "target_audience": str(last.get("target_audience", "")),
+                "tone": str(last.get("tone", "")),
                 "reason_note": note,
             })
+            print(f"  KB insight built for bike {bid}")
         except Exception as e:
             print(f"  WARN: skipping insight for bike {bid}: {e}")
 
     if rows:
         try:
             append_knowledge_base(rows)
+            print(f"  ✓ {len(rows)} insight(s) saved to knowledge base")
         except Exception as e:
             print(f"  WARN: failed to write knowledge base: {e}")
+    else:
+        print(f"  WARN: no KB rows built for sold bikes {sold_ids}")
 
 
 # Knowledge base
@@ -348,7 +356,7 @@ def _stamp_sold_in_log(sold_ids: list[int], trial_num: int,
     if "sold_in_campaign" not in df.columns:
         df["sold_in_campaign"] = ""
     df["sold_in_campaign"] = df["sold_in_campaign"].fillna("").astype(str)
-    mask = (df["trial_num"] == trial_num) & (df["bike_id"].isin(sold_ids))
+    mask = (df["trial_num"].astype(int) == int(trial_num)) & (df["bike_id"].astype(int).isin([int(x) for x in sold_ids]))
     df.loc[mask, "sold_in_campaign"] = "yes"
     df.to_csv(path, index=False)
 
@@ -400,7 +408,7 @@ def load_bike_campaign_history(bike_id: int, path: str = None) -> list[dict]:
     df = load_campaigns(path)
     if df.empty:
         return []
-    bike_rows = df[df["bike_id"] == bike_id].sort_values("trial_num")
+    bike_rows = df[df["bike_id"].astype(int) == int(bike_id)].sort_values("trial_num")
     return bike_rows.to_dict(orient="records")
 
 
