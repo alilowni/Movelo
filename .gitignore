@@ -1,24 +1,38 @@
-# Environment
+# environment
 .env
 
-# Python
+# python
 __pycache__/
 *.pyc
+*.pyo
 venv/
 .venv/
+*.egg-info/
 
-# macOS
+# macos
 .DS_Store
+.AppleDouble
+.LSOverride
 
-# Output (generated images, etc.)
+# windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# linux
+*~
+
+# ide
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# generated at runtime — do not commit
 output/
 banners/
-
-# Working data files (generated from seed on first run)
 inventory.csv
 campaigns.csv
 knowledge_base.csv
-*.xlsx
-
-# Legacy name (in case leftover)
 trials_log.csv
+*.xlsx
