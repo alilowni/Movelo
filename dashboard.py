@@ -205,7 +205,13 @@ st.sidebar.caption("Refurbished Bike Marketing Dashboard")
 
 page = st.sidebar.radio(
     "Navigate",
-    ["Bike Inventory", "Campaigns", "Analytics", "Knowledge Base"],
+    ["🗄️ Bike Inventory", "📣 Campaigns", "📊 Analytics", "🧠 Knowledge Base"],
+    captions=[
+        "Your database — all available bikes and their scores",
+        "Actions your AI agents run to automate selling",
+        "Dashboards and monitoring for your campaigns",
+        "Learned insights — gets smarter with every sale",
+    ],
 )
 
 st.sidebar.markdown("---")
@@ -225,7 +231,7 @@ if run_clicked:
 
 # Page: Bike Inventory
 
-if page == "Bike Inventory":
+if page == "🗄️ Bike Inventory":
     st.title("Bike Inventory")
     bikes = get_bikes()
 
@@ -325,7 +331,7 @@ if page == "Bike Inventory":
 
 # Page: Campaigns
 
-elif page == "Campaigns":
+elif page == "📣 Campaigns":
     st.title("Marketing Campaigns")
     trials = get_campaigns()
     bikes_df = get_bikes()
@@ -389,7 +395,7 @@ elif page == "Campaigns":
 
 # Page: Analytics
 
-elif page == "Analytics":
+elif page == "📊 Analytics":
     st.title("Analytics")
     bikes_df = get_bikes()
     trials = get_campaigns()
@@ -509,7 +515,7 @@ elif page == "Analytics":
 
 # Page: Knowledge Base
 
-elif page == "Knowledge Base":
+elif page == "🧠 Knowledge Base":
     st.title("Sales Knowledge Base")
     st.caption(
         "Short notes on **why each sold bike likely sold** — captured automatically "
