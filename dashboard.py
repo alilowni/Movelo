@@ -250,6 +250,16 @@ if refresh_clicked:
 if run_clicked:
     _run_campaign()
 
+st.sidebar.markdown("---")
+st.sidebar.caption(
+    "Made with ❤️ at PON Hackathon  \n"
+    "John Rock · john.rock@gmail.com  \n"
+    "Xander Lowni · Datalab  \n"
+    "Sarah Peeters · sarah.p@volkswagen.nl  \n"
+    "Tom de Vries · tom.devries@pon.com  \n"
+    "Lisa Jansen · lisa.j@datalab.nl"
+)
+
 
 # Page: Bike Inventory
 
@@ -359,11 +369,20 @@ if page == "🗄️ Bike Inventory":
                 st.info("No product image")
         with dcol2:
             st.markdown(f"**{bike_row['title']}**")
-            st.markdown(f"Brand: {bike_row['brand']} | Category: {bike_row['category']}")
-            st.markdown(f"Price: **€{bike_row['price']:.0f}** | Condition: {bike_row['condition']}")
             km = bike_row['km_ridden']
-            st.markdown(f"KM: {km if pd.notna(km) else 'N/A'} | Year: {int(bike_row['year']) if pd.notna(bike_row['year']) else 'N/A'}")
-            st.markdown(f"Score: {risk_color(bike_row['sell_difficulty_score'])} **{bike_row['sell_difficulty_score']}**/5 | Days listed: {bike_row['days_on_market']}")
+            year = int(bike_row['year']) if pd.notna(bike_row.get('year')) else 'N/A'
+            info_lines = (
+                f"| | |\n|---|---|\n"
+                f"| **Brand** | {bike_row['brand']} |\n"
+                f"| **Category** | {bike_row['category']} |\n"
+                f"| **Price** | €{bike_row['price']:.0f} |\n"
+                f"| **Condition** | {bike_row['condition']} |\n"
+                f"| **KM** | {km if pd.notna(km) else 'N/A'} |\n"
+                f"| **Year** | {year} |\n"
+                f"| **Score** | {risk_color(bike_row['sell_difficulty_score'])} {bike_row['sell_difficulty_score']}/5 |\n"
+                f"| **Days listed** | {bike_row['days_on_market']} |"
+            )
+            st.markdown(info_lines)
 
             desc = bike_row.get("description", "")
             if pd.notna(desc) and desc:
@@ -373,12 +392,9 @@ if page == "🗄️ Bike Inventory":
             if pd.notna(product_url) and product_url:
                 st.link_button("View on website", product_url)
 
-            st.markdown("---")
             current_status = bike_row.get("status", "available")
             if current_status == "sold":
                 st.success("This bike is marked as SOLD")
-            else:
-                st.info("Sales happen automatically at the end of each campaign.")
 
     st.info(
         "**Production roadmap** — In a real deployment this inventory connects to your "
@@ -449,12 +465,6 @@ elif page == "📣 Campaigns":
             if bike_trials.empty:
                 st.info("No campaigns for this bike yet.")
             else:
-                st.dataframe(
-                    bike_trials[["trial_num", "date", "selling_angle", "target_audience",
-                                 "tone", "actions", "email_subject"]],
-                    width="stretch",
-                    hide_index=True,
-                )
                 for _, row in bike_trials.iterrows():
                     _render_campaign_card(row, bikes_df)
 
