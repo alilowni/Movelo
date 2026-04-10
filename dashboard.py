@@ -1,4 +1,4 @@
-# movelo Marketing Dashboard
+# Movelo Marketing Dashboard
 #
 # streamlit run dashboard.py
 # python main.py --dashboard
@@ -19,7 +19,7 @@ from scoring import (
 
 init_working_files()
 
-st.set_page_config(page_title="movelo Dashboard", page_icon="🚲", layout="wide")
+st.set_page_config(page_title="Movelo Dashboard", page_icon="🚲", layout="wide")
 
 
 @st.cache_data(ttl=10)
@@ -116,7 +116,7 @@ def _render_campaign_card(row: pd.Series, bikes_df: pd.DataFrame) -> None:
 
 # Sidebar
 
-st.sidebar.title("movelo")
+st.sidebar.title("Movelo")
 st.sidebar.caption("Refurbished Bike Marketing Dashboard")
 
 page = st.sidebar.radio(

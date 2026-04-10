@@ -55,7 +55,7 @@ flowchart TD
     Marketer --> ImageGen
 
     subgraph step6 [Step 6 — Image Generation]
-        ImageGen["Gemini 2.5 Flash Image\nUses product photo as reference\nGenerates 2 lifestyle photos:\n· Urban setting\n· Nature setting\nWith brand name + movelo logo"]
+        ImageGen["Gemini 2.5 Flash Image\nUses product photo as reference\nGenerates 2 lifestyle photos:\n· Urban setting\n· Nature setting\nWith brand name + Movelo logo"]
     end
 
     ImageGen --> Log

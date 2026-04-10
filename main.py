@@ -1,4 +1,4 @@
-# movelo — Refurbished Bike Marketing Pipeline
+# Movelo — Refurbished Bike Marketing Pipeline
 #
 # python main.py              Run one campaign (advances 1 day)
 # python main.py --test-api   Test API connections only
@@ -204,7 +204,7 @@ def run_dashboard() -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="movelo marketing pipeline")
+    parser = argparse.ArgumentParser(description="Movelo marketing pipeline")
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--test-api", action="store_true",
                        help="Test API connections and exit")
