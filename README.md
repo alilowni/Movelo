@@ -4,6 +4,10 @@ AI-powered marketing pipeline for a refurbished bike shop. Built during the **PO
 
 The system scores bikes by how hard they are to sell, then automatically generates targeted marketing campaigns (strategy briefs, Instagram copy, emails, lifestyle photos) for the toughest ones. Every campaign is logged so the AI never repeats a failed approach.
 
+## Demo
+
+https://github.com/user-attachments/assets/1e7d6d26-cdff-4623-ba6d-3f1351925d0b
+
 ---
 
 ## What You Need
