@@ -452,19 +452,25 @@ elif page == "📣 Campaigns":
     trials = get_campaigns()
     bikes_df = get_bikes()
     evals = get_image_evals()
+    has_any_assets = bool(evals)
 
     if trials.empty:
         st.info("No campaigns yet. Click **▶ Campaign** in the sidebar to start one.")
     else:
-        bikes_with_assets = {bid for bid, e in evals.items() if e.get("images")}
+        bikes_with_assets = {bid for bid, e in evals.items() if e.get("images")} if has_any_assets else set()
 
-        vcol1, vcol2 = st.columns([2, 1])
-        with vcol1:
+        assets_only = False
+        if has_any_assets:
+            vcol1, vcol2 = st.columns([2, 1])
+            with vcol1:
+                view_mode = st.radio("View by", ["Campaign", "Bike journey"],
+                                     horizontal=True, label_visibility="collapsed")
+            with vcol2:
+                assets_only = st.toggle("📎 Has marketing assets", value=False,
+                                         help="Show only bikes that have banners + landing page")
+        else:
             view_mode = st.radio("View by", ["Campaign", "Bike journey"],
                                  horizontal=True, label_visibility="collapsed")
-        with vcol2:
-            assets_only = st.toggle("📎 Has marketing assets", value=False,
-                                     help="Show only bikes that have banners + landing page")
 
         # campaign view — browse by campaign number
         if view_mode == "Campaign":
@@ -480,8 +486,11 @@ elif page == "📣 Campaigns":
             if assets_only:
                 trial_data = trial_data[trial_data["bike_id"].astype(int).isin(bikes_with_assets)]
             trial_date = trial_data["date"].dropna().values[0] if not trial_data["date"].dropna().empty else "N/A"
-            n_with_assets = len(trial_data[trial_data["bike_id"].astype(int).isin(bikes_with_assets)])
-            st.markdown(f"### Campaign {int(selected_trial)} — {trial_date} — {len(trial_data)} bikes ({n_with_assets} with assets)")
+            heading = f"### Campaign {int(selected_trial)} — {trial_date} — {len(trial_data)} bikes"
+            if has_any_assets:
+                n_with_assets = len(trial_data[trial_data["bike_id"].astype(int).isin(bikes_with_assets)])
+                heading += f" ({n_with_assets} with assets)"
+            st.markdown(heading)
 
             for _, row in trial_data.iterrows():
                 _render_campaign_card(row, bikes_df, evals)
@@ -491,15 +500,20 @@ elif page == "📣 Campaigns":
             targeted_ids = sorted(trials["bike_id"].unique())
             if assets_only:
                 targeted_ids = [bid for bid in targeted_ids if int(bid) in bikes_with_assets]
+            def _bike_label(x):
+                bdf = bikes_df[bikes_df["id"] == int(x)]
+                label = f"[{int(x)}] "
+                label += bdf["title"].values[0] if not bdf.empty else str(x)
+                if not bdf.empty and bdf["status"].values[0] == "sold":
+                    label += " 🏷 SOLD"
+                if has_any_assets and int(x) in bikes_with_assets:
+                    label += " 📎"
+                return label
+
             selected_bike = st.selectbox(
                 "Select bike to see full journey",
                 targeted_ids,
-                format_func=lambda x: (
-                    f"[{int(x)}] "
-                    f"{bikes_df[bikes_df['id']==int(x)]['title'].values[0] if not bikes_df[bikes_df['id']==int(x)].empty else x}"
-                    f"{' 🏷 SOLD' if not bikes_df[bikes_df['id']==int(x)].empty and bikes_df[bikes_df['id']==int(x)]['status'].values[0]=='sold' else ''}"
-                    f"{' 📎' if int(x) in bikes_with_assets else ''}"
-                ),
+                format_func=_bike_label,
             )
             bike_info = bikes_df[bikes_df["id"] == int(selected_bike)]
             if not bike_info.empty:

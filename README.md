@@ -114,6 +114,12 @@ The score is a placeholder formula for the PoC. The plan is to replace it with r
 
 On first run, `inventory.csv` is automatically created from the seed file.
 
+### Optional: Marketing Assets
+
+If you have an `image_evaluations.xlsx` file (banner scores and landing page evaluations), place it in the project root. The dashboard will automatically show top-scored banners and link to personalized landing pages per bike.
+
+If the file is missing, everything works normally — the banner and landing page sections are simply hidden. This keeps the project reproducible for other teams without needing access to the evaluation data.
+
 ---
 
 ## Dashboard
